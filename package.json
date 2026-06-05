@@ -1,0 +1,20 @@
+{
+  "name": "openshare",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenShare is a free browser-based screen sharing MVP.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:server": "pnpm --filter server dev",
+    "build": "pnpm --filter @openshare/shared build && pnpm -r --filter './apps/*' build",
+    "lint": "pnpm --filter @openshare/shared build && pnpm -r lint",
+    "typecheck": "pnpm --filter @openshare/shared build && pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
