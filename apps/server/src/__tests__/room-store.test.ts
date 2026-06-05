@@ -14,11 +14,15 @@ describe("RoomStore", () => {
     const room = store.createRoom();
 
     store.joinHost(room.id, "socket-host");
-    const { viewerId } = store.joinViewer(room.id, "socket-viewer");
+    const { requestId } = store.requestViewerJoin(room.id, "socket-viewer", "Nani");
+    expect(store.getState(room.id).viewerCount).toBe(0);
+
+    const { viewerId } = store.approveViewer(room.id, requestId);
 
     expect(viewerId).not.toBe("socket-viewer");
     expect(store.getHostSocketId(room.id)).toBe("socket-host");
     expect(store.getViewerSocketId(room.id, viewerId)).toBe("socket-viewer");
+    expect(store.getViewer(room.id, viewerId)?.displayName).toBe("Nani");
     expect(store.getState(room.id, viewerId)).toMatchObject({
       state: ROOM_STATES.WAITING_FOR_HOST,
       viewerCount: 1,
@@ -42,7 +46,8 @@ describe("RoomStore", () => {
     const store = new RoomStore();
     const room = store.createRoom(1000);
     store.joinHost(room.id, "socket-host", 1000);
-    const { viewerId } = store.joinViewer(room.id, "socket-viewer", 1000);
+    const { requestId } = store.requestViewerJoin(room.id, "socket-viewer", "Nani", 1000);
+    const { viewerId } = store.approveViewer(room.id, requestId, 1000);
 
     const viewerMembership = store.leaveBySocket("socket-viewer", 2000);
     expect(viewerMembership?.participantId).toBe(viewerId);

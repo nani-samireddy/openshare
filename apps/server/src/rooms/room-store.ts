@@ -2,15 +2,24 @@ import { randomBytes } from "node:crypto";
 import {
   ROOM_ID_LENGTH,
   ROOM_STATES,
-  type RoomRole,
   type RoomStatePayload,
   isValidRoomId
 } from "@openshare/shared";
 
+export type ViewerRecord = {
+  socketId: string;
+  displayName: string;
+};
+
+export type PendingViewerRecord = ViewerRecord & {
+  requestId: string;
+};
+
 export type Room = {
   id: string;
   hostSocketId: string | null;
-  viewers: Map<string, string>;
+  viewers: Map<string, ViewerRecord>;
+  pendingViewers: Map<string, PendingViewerRecord>;
   isSharing: boolean;
   wasSharing: boolean;
   createdAt: number;
@@ -19,8 +28,9 @@ export type Room = {
 
 export type SocketRoomMembership = {
   roomId: string;
-  role: RoomRole;
+  role: "host" | "viewer" | "pending_viewer";
   participantId?: string;
+  displayName?: string;
 };
 
 export class RoomStore {
@@ -37,6 +47,7 @@ export class RoomStore {
       id,
       hostSocketId: null,
       viewers: new Map(),
+      pendingViewers: new Map(),
       isSharing: false,
       wasSharing: false,
       createdAt: now,
@@ -70,13 +81,56 @@ export class RoomStore {
     return room;
   }
 
-  joinViewer(roomId: string, socketId: string, now = Date.now()): { room: Room; viewerId: string } {
+  requestViewerJoin(roomId: string, socketId: string, displayName: string, now = Date.now()): { room: Room; requestId: string } {
     const room = this.requireRoom(roomId);
-    const viewerId = this.createParticipantId();
-    room.viewers.set(viewerId, socketId);
+    const requestId = this.createParticipantId();
+    const normalizedName = this.normalizeDisplayName(displayName);
+    room.pendingViewers.set(requestId, { requestId, socketId, displayName: normalizedName });
     room.updatedAt = now;
-    this.socketMemberships.set(socketId, { roomId, role: "viewer", participantId: viewerId });
-    return { room, viewerId };
+    this.socketMemberships.set(socketId, {
+      roomId,
+      role: "pending_viewer",
+      participantId: requestId,
+      displayName: normalizedName
+    });
+    return { room, requestId };
+  }
+
+  approveViewer(roomId: string, requestId: string, now = Date.now()): { room: Room; viewerId: string; viewer: ViewerRecord } {
+    const room = this.requireRoom(roomId);
+    const pendingViewer = room.pendingViewers.get(requestId);
+    if (!pendingViewer) {
+      throw new Error("Join request not found");
+    }
+
+    const viewerId = this.createParticipantId();
+    const viewer = {
+      socketId: pendingViewer.socketId,
+      displayName: pendingViewer.displayName
+    };
+    room.pendingViewers.delete(requestId);
+    room.viewers.set(viewerId, viewer);
+    room.updatedAt = now;
+    this.socketMemberships.set(pendingViewer.socketId, {
+      roomId,
+      role: "viewer",
+      participantId: viewerId,
+      displayName: viewer.displayName
+    });
+    return { room, viewerId, viewer };
+  }
+
+  denyViewer(roomId: string, requestId: string, now = Date.now()): PendingViewerRecord {
+    const room = this.requireRoom(roomId);
+    const pendingViewer = room.pendingViewers.get(requestId);
+    if (!pendingViewer) {
+      throw new Error("Join request not found");
+    }
+
+    room.pendingViewers.delete(requestId);
+    room.updatedAt = now;
+    this.socketMemberships.delete(pendingViewer.socketId);
+    return pendingViewer;
   }
 
   markSharing(roomId: string, isSharing: boolean, now = Date.now()): Room {
@@ -96,6 +150,10 @@ export class RoomStore {
   }
 
   getViewerSocketId(roomId: string, viewerId: string): string | undefined {
+    return this.rooms.get(roomId)?.viewers.get(viewerId)?.socketId;
+  }
+
+  getViewer(roomId: string, viewerId: string): ViewerRecord | undefined {
     return this.rooms.get(roomId)?.viewers.get(viewerId);
   }
 
@@ -116,6 +174,10 @@ export class RoomStore {
         room.viewers.delete(membership.participantId);
       }
 
+      if (membership.role === "pending_viewer" && membership.participantId) {
+        room.pendingViewers.delete(membership.participantId);
+      }
+
       room.updatedAt = now;
     }
 
@@ -133,8 +195,12 @@ export class RoomStore {
       this.socketMemberships.delete(room.hostSocketId);
     }
 
-    for (const socketId of room.viewers.values()) {
-      this.socketMemberships.delete(socketId);
+    for (const viewer of room.viewers.values()) {
+      this.socketMemberships.delete(viewer.socketId);
+    }
+
+    for (const pendingViewer of room.pendingViewers.values()) {
+      this.socketMemberships.delete(pendingViewer.socketId);
     }
 
     this.rooms.delete(roomId);
@@ -179,5 +245,14 @@ export class RoomStore {
 
   private createParticipantId(): string {
     return `viewer_${randomBytes(8).toString("base64url")}`;
+  }
+
+  private normalizeDisplayName(displayName: string): string {
+    const trimmed = displayName.trim().replace(/\s+/g, " ");
+    if (!trimmed) {
+      throw new Error("Display name is required");
+    }
+
+    return trimmed.slice(0, 40);
   }
 }

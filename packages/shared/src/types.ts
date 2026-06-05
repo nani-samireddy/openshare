@@ -6,6 +6,13 @@ export type RoomState = (typeof ROOM_STATES)[keyof typeof ROOM_STATES];
 export type RoomJoinPayload = {
   roomId: string;
   role: RoomRole;
+  displayName?: string;
+};
+
+export type RoomJoinAck = {
+  ok: boolean;
+  error?: string;
+  status?: "joined" | "pending";
 };
 
 export type RoomStatePayload = {
@@ -20,11 +27,35 @@ export type RoomStatePayload = {
 export type ViewerJoinedPayload = {
   roomId: string;
   viewerId: string;
+  displayName: string;
 };
 
 export type ViewerLeftPayload = {
   roomId: string;
   viewerId: string;
+  displayName?: string;
+};
+
+export type ViewerRequestedPayload = {
+  roomId: string;
+  requestId: string;
+  displayName: string;
+};
+
+export type ViewerApprovalPayload = {
+  roomId: string;
+  requestId: string;
+  approved: boolean;
+};
+
+export type ViewerApprovedPayload = {
+  roomId: string;
+  viewerId: string;
+};
+
+export type ViewerDeniedPayload = {
+  roomId: string;
+  reason: string;
 };
 
 export type ClientOfferPayload = {

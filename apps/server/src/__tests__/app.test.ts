@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { io as createClient, type Socket } from "socket.io-client";
-import { SOCKET_EVENTS, type RoomStatePayload } from "@openshare/shared";
+import { SOCKET_EVENTS, type RoomStatePayload, type ViewerRequestedPayload } from "@openshare/shared";
 import { buildServer, type OpenShareServer } from "../app.js";
 
 let server: OpenShareServer | undefined;
@@ -44,7 +44,7 @@ describe("server HTTP API", () => {
 });
 
 describe("signaling", () => {
-  it("broadcasts room state when a viewer joins", async () => {
+  it("requests host approval before broadcasting viewer room state", async () => {
     server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
     await server.app.listen({ port: 0 });
     const address = server.app.server.address();
@@ -59,6 +59,11 @@ describe("signaling", () => {
 
     try {
       await Promise.all([waitForConnect(host), waitForConnect(viewer)]);
+      const requestPromise = waitForEventWhere<ViewerRequestedPayload>(
+        host,
+        SOCKET_EVENTS.VIEWER_REQUESTED,
+        (request) => request.roomId === room.id && request.displayName === "Nani"
+      );
       const statePromise = waitForEventWhere<RoomStatePayload>(
         host,
         SOCKET_EVENTS.ROOM_STATE,
@@ -66,7 +71,10 @@ describe("signaling", () => {
       );
 
       host.emit(SOCKET_EVENTS.ROOM_JOIN, { roomId: room.id, role: "host" });
-      viewer.emit(SOCKET_EVENTS.ROOM_JOIN, { roomId: room.id, role: "viewer" });
+      viewer.emit(SOCKET_EVENTS.ROOM_JOIN, { roomId: room.id, role: "viewer", displayName: "Nani" });
+
+      const request = await requestPromise;
+      host.emit(SOCKET_EVENTS.VIEWER_APPROVAL, { roomId: room.id, requestId: request.requestId, approved: true });
 
       const state = await statePromise;
       expect(state.roomId).toBe(room.id);

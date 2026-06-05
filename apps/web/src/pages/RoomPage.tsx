@@ -1,7 +1,7 @@
 import { LogOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ROOM_STATES, SOCKET_EVENTS, isValidRoomId, type RoomRole } from "@openshare/shared";
+import { ROOM_STATES, SOCKET_EVENTS, isValidRoomId, type RoomRole, type ViewerRequestedPayload } from "@openshare/shared";
 import { Button } from "../components/Button";
 import { ConnectionStateBadge } from "../components/ConnectionStateBadge";
 import { CopyLinkButton } from "../components/CopyLinkButton";
@@ -23,7 +23,17 @@ export function RoomPage() {
   const role: RoomRole = searchParams.get("role") === "host" ? "host" : "viewer";
   const inviteUrl = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const { socket, connected } = useSocket();
-  const { roomState, error: roomError } = useRoom(socket, roomId, role);
+  const [viewerNameInput, setViewerNameInput] = useState("");
+  const [viewerDisplayName, setViewerDisplayName] = useState("");
+  const [hasRequestedJoin, setHasRequestedJoin] = useState(role === "host");
+  const [pendingRequests, setPendingRequests] = useState<ViewerRequestedPayload[]>([]);
+  const { roomState, error: roomError, approvalState } = useRoom({
+    socket,
+    roomId,
+    role,
+    displayName: viewerDisplayName,
+    shouldJoin: role === "host" || hasRequestedJoin
+  });
   const { iceServers, error: configError } = usePublicConfig();
   const screenShare = useScreenShare();
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -56,6 +66,30 @@ export function RoomPage() {
     }
   }, [role, roomId, screenShare.stream, socket]);
 
+  useEffect(() => {
+    if (role !== "host") {
+      return;
+    }
+
+    function handleViewerRequested(payload: ViewerRequestedPayload) {
+      if (payload.roomId !== roomId) {
+        return;
+      }
+
+      setPendingRequests((current) => {
+        if (current.some((request) => request.requestId === payload.requestId)) {
+          return current;
+        }
+        return [...current, payload];
+      });
+    }
+
+    socket.on(SOCKET_EVENTS.VIEWER_REQUESTED, handleViewerRequested);
+    return () => {
+      socket.off(SOCKET_EVENTS.VIEWER_REQUESTED, handleViewerRequested);
+    };
+  }, [role, roomId, socket]);
+
   async function handleStartSharing() {
     const stream = await screenShare.startSharing();
     if (stream) {
@@ -76,6 +110,22 @@ export function RoomPage() {
     navigate("/");
   }
 
+  function handleViewerJoinSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextName = viewerNameInput.trim().replace(/\s+/g, " ");
+    if (!nextName) {
+      return;
+    }
+
+    setViewerDisplayName(nextName.slice(0, 40));
+    setHasRequestedJoin(true);
+  }
+
+  function handleApproval(requestId: string, approved: boolean) {
+    socket.emit(SOCKET_EVENTS.VIEWER_APPROVAL, { roomId, requestId, approved });
+    setPendingRequests((current) => current.filter((request) => request.requestId !== requestId));
+  }
+
   if (!isValidRoomId(roomId)) {
     return <RoomShell message="This room link is invalid." />;
   }
@@ -87,6 +137,44 @@ export function RoomPage() {
         ? "Your shared screen preview"
         : "Host shared screen"
       : statusVideoLabel(roomState.state, role);
+
+  if (role === "viewer" && approvalState !== "approved") {
+    return (
+      <main className="min-h-screen bg-mint px-4 py-5 text-ink sm:px-6 lg:px-8">
+        <section className="mx-auto flex min-h-[calc(100vh-2.5rem)] w-full max-w-xl items-center">
+          <div className="w-full rounded-md border-[3px] border-ink bg-cream p-5 shadow-sketch">
+            <p className="text-sm font-extrabold uppercase tracking-wider text-ink/70">OpenShare</p>
+            <h1 className="mt-2 text-3xl font-black text-ink">Join room {roomId}</h1>
+            {approvalState === "pending" ? (
+              <div className="mt-5 rounded-md border-2 border-ink bg-sun px-4 py-3 text-sm font-extrabold text-ink">
+                Waiting for the host to approve you.
+              </div>
+            ) : (
+              <form className="mt-5 flex flex-col gap-3" onSubmit={handleViewerJoinSubmit}>
+                <label className="text-sm font-extrabold text-ink" htmlFor="viewer-name">
+                  Your name
+                </label>
+                <input
+                  id="viewer-name"
+                  value={viewerNameInput}
+                  onChange={(event) => setViewerNameInput(event.target.value)}
+                  maxLength={40}
+                  placeholder="Nani"
+                  className="min-h-12 rounded-md border-2 border-ink bg-white px-4 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-sun/60"
+                />
+                <Button type="submit" disabled={!viewerNameInput.trim()}>
+                  Request to join
+                </Button>
+              </form>
+            )}
+            {roomError ? (
+              <div className="mt-4 rounded-md border-2 border-ink bg-coral px-4 py-3 text-sm font-bold text-ink shadow-soft">{roomError}</div>
+            ) : null}
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-mint px-4 py-5 text-ink sm:px-6 lg:px-8">
@@ -142,6 +230,31 @@ export function RoomPage() {
                     onStart={handleStartSharing}
                     onStop={handleStopSharing}
                   />
+                ) : null}
+                {role === "host" && pendingRequests.length > 0 ? (
+                  <div className="rounded-md border-2 border-ink bg-cream p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Join requests</p>
+                    <div className="mt-3 flex flex-col gap-3">
+                      {pendingRequests.map((request) => (
+                        <div key={request.requestId} className="rounded-md border-2 border-ink bg-white p-3">
+                          <p className="text-sm font-extrabold text-ink">{request.displayName}</p>
+                          <div className="mt-3 grid grid-cols-2 gap-2">
+                            <Button type="button" className="min-h-10 px-3" onClick={() => handleApproval(request.requestId, true)}>
+                              Approve
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="danger"
+                              className="min-h-10 px-3"
+                              onClick={() => handleApproval(request.requestId, false)}
+                            >
+                              Deny
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 ) : null}
                 <Button
                   type="button"

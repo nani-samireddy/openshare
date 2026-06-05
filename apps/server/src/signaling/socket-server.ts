@@ -5,6 +5,7 @@ import {
   type ClientAnswerPayload,
   type ClientIceCandidatePayload,
   type ClientOfferPayload,
+  type RoomJoinAck,
   type RoomJoinPayload
 } from "@openshare/shared";
 import type { RoomStore } from "../rooms/room-store.js";
@@ -32,30 +33,73 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
   }
 
   io.on("connection", (socket) => {
-    socket.on(SOCKET_EVENTS.ROOM_JOIN, (payload: RoomJoinPayload, ack?: (result: { ok: boolean; error?: string }) => void) => {
+    socket.on(SOCKET_EVENTS.ROOM_JOIN, (payload: RoomJoinPayload, ack?: (result: RoomJoinAck) => void) => {
       try {
         if (payload.role === "host") {
           const room = roomStore.joinHost(payload.roomId, socket.id);
           socket.join(roomChannel(room.id));
           socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id));
+          for (const pendingViewer of room.pendingViewers.values()) {
+            socket.emit(SOCKET_EVENTS.VIEWER_REQUESTED, {
+              roomId: room.id,
+              requestId: pendingViewer.requestId,
+              displayName: pendingViewer.displayName
+            });
+          }
           emitRoomState(room.id);
-          ack?.({ ok: true });
+          ack?.({ ok: true, status: "joined" });
           return;
         }
 
-        const { room, viewerId } = roomStore.joinViewer(payload.roomId, socket.id);
-        socket.join(roomChannel(room.id));
-        socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, viewerId));
-        emitRoomState(room.id);
-
+        const { room, requestId } = roomStore.requestViewerJoin(payload.roomId, socket.id, payload.displayName ?? "");
+        socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id));
         const hostSocketId = roomStore.getHostSocketId(room.id);
         if (hostSocketId) {
-          io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_JOINED, { roomId: room.id, viewerId });
+          io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_REQUESTED, {
+            roomId: room.id,
+            requestId,
+            displayName: payload.displayName?.trim() || "Viewer"
+          });
         }
 
-        ack?.({ ok: true });
+        ack?.({ ok: true, status: "pending" });
       } catch (error) {
         ack?.({ ok: false, error: error instanceof Error ? error.message : "Unable to join room" });
+      }
+    });
+
+    socket.on(SOCKET_EVENTS.VIEWER_APPROVAL, (payload: { roomId: string; requestId: string; approved: boolean }) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      try {
+        if (!payload.approved) {
+          const deniedViewer = roomStore.denyViewer(payload.roomId, payload.requestId);
+          io.to(deniedViewer.socketId).emit(SOCKET_EVENTS.VIEWER_DENIED, {
+            roomId: payload.roomId,
+            reason: "The host declined your request."
+          });
+          return;
+        }
+
+        const { room, viewerId, viewer } = roomStore.approveViewer(payload.roomId, payload.requestId);
+        socketFor(io, viewer.socketId)?.join(roomChannel(room.id));
+        io.to(viewer.socketId).emit(SOCKET_EVENTS.VIEWER_APPROVED, { roomId: room.id, viewerId });
+        io.to(viewer.socketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, viewerId));
+        emitRoomState(room.id);
+
+        socket.emit(SOCKET_EVENTS.VIEWER_JOINED, {
+          roomId: room.id,
+          viewerId,
+          displayName: viewer.displayName
+        });
+      } catch {
+        socket.emit(SOCKET_EVENTS.VIEWER_DENIED, {
+          roomId: payload.roomId,
+          reason: "That join request is no longer available."
+        });
       }
     });
 
@@ -76,7 +120,12 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       const room = roomStore.getRoom(payload.roomId);
       if (room) {
         for (const viewerId of room.viewers.keys()) {
-          socket.emit(SOCKET_EVENTS.VIEWER_JOINED, { roomId: payload.roomId, viewerId });
+          const viewer = roomStore.getViewer(payload.roomId, viewerId);
+          socket.emit(SOCKET_EVENTS.VIEWER_JOINED, {
+            roomId: payload.roomId,
+            viewerId,
+            displayName: viewer?.displayName ?? "Viewer"
+          });
         }
       }
     });
@@ -171,7 +220,9 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
           isSharing: false
         });
         io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.HOST_STOPPED_SHARING, { roomId });
-        roomStore.deleteRoom(roomId);
+        if (!isDisconnect) {
+          roomStore.deleteRoom(roomId);
+        }
       }
       return;
     }
@@ -179,12 +230,13 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     if (membership.participantId) {
       const hostSocketId = roomStore.getHostSocketId(roomId);
       if (hostSocketId) {
-        io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_LEFT, {
-          roomId,
-          viewerId: membership.participantId
-        });
+          io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_LEFT, {
+            roomId,
+            viewerId: membership.participantId,
+            displayName: membership.displayName
+          });
+        }
       }
-    }
 
     if (roomStore.getRoom(roomId)) {
       emitRoomState(roomId);

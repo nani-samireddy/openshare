@@ -41,7 +41,7 @@ export function useSocket(): { socket: Socket; connected: boolean } {
       socket.off("disconnect", handleDisconnect);
       disconnectTimerRef.current = window.setTimeout(() => {
         socket.disconnect();
-      }, 0);
+      }, 250);
     };
   }, [socket]);
 
