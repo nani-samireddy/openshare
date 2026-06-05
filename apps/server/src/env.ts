@@ -7,6 +7,10 @@ export type ServerEnv = {
   roomTtlMinutes: number;
 };
 
+function normalizeOrigin(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
 function parsePort(value: string | undefined): number {
   const port = Number(value ?? 4000);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -26,7 +30,7 @@ function parsePositiveNumber(value: string | undefined, fallback: number): numbe
 export function loadEnv(): ServerEnv {
   return {
     port: parsePort(process.env.PORT),
-    clientOrigin: process.env.CLIENT_ORIGIN ?? DEFAULT_CLIENT_ORIGIN,
+    clientOrigin: normalizeOrigin(process.env.CLIENT_ORIGIN ?? DEFAULT_CLIENT_ORIGIN),
     roomTtlMinutes: parsePositiveNumber(process.env.ROOM_TTL_MINUTES, DEFAULT_ROOM_TTL_MINUTES)
   };
 }

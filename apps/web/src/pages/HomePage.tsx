@@ -3,13 +3,20 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
 import { createRoom } from "../lib/api";
+import { SCREEN_SHARE_UNSUPPORTED_MESSAGE, supportsScreenSharing } from "../lib/screenShareSupport";
 
 export function HomePage() {
   const navigate = useNavigate();
+  const canHostFromBrowser = supportsScreenSharing();
   const [isCreating, setIsCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(canHostFromBrowser ? null : SCREEN_SHARE_UNSUPPORTED_MESSAGE);
 
   async function handleStartSharing() {
+    if (!canHostFromBrowser) {
+      setError(SCREEN_SHARE_UNSUPPORTED_MESSAGE);
+      return;
+    }
+
     setIsCreating(true);
     setError(null);
 
@@ -41,7 +48,7 @@ export function HomePage() {
             <Button
               type="button"
               onClick={handleStartSharing}
-              disabled={isCreating}
+              disabled={isCreating || !canHostFromBrowser}
               icon={<MonitorUp aria-hidden className="h-5 w-5 stroke-[3]" />}
               className="min-w-40"
             >

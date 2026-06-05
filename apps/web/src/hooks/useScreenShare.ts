@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { SCREEN_SHARE_UNSUPPORTED_MESSAGE, supportsScreenSharing } from "../lib/screenShareSupport";
 
 type ScreenShareState = {
   stream: MediaStream | null;
@@ -10,12 +11,10 @@ type ScreenShareState = {
 };
 
 export function useScreenShare(): ScreenShareState {
-  const isSupported = useMemo(() => Boolean(navigator.mediaDevices?.getDisplayMedia), []);
+  const isSupported = useMemo(() => supportsScreenSharing(), []);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isStarting, setIsStarting] = useState(false);
-  const [error, setError] = useState<string | null>(
-    isSupported ? null : "Your browser does not support screen sharing. Please try the latest version of Chrome, Edge, or Firefox."
-  );
+  const [error, setError] = useState<string | null>(isSupported ? null : SCREEN_SHARE_UNSUPPORTED_MESSAGE);
 
   const stopSharing = useCallback(() => {
     setStream((current) => {
@@ -26,7 +25,7 @@ export function useScreenShare(): ScreenShareState {
 
   const startSharing = useCallback(async () => {
     if (!isSupported) {
-      setError("Your browser does not support screen sharing. Please try the latest version of Chrome, Edge, or Firefox.");
+      setError(SCREEN_SHARE_UNSUPPORTED_MESSAGE);
       return null;
     }
 

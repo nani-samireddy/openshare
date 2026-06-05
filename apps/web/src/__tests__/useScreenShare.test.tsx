@@ -12,7 +12,7 @@ describe("useScreenShare", () => {
     const { result } = renderHook(() => useScreenShare());
 
     expect(result.current.isSupported).toBe(false);
-    expect(result.current.error).toContain("does not support screen sharing");
+    expect(result.current.error).toContain("Hosting screen share is not supported");
   });
 
   it("stops tracks when sharing stops", async () => {
