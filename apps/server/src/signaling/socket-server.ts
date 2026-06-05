@@ -10,7 +10,7 @@ import {
 import type { RoomStore } from "../rooms/room-store.js";
 
 type SignalingOptions = {
-  clientOrigin: string;
+  clientOrigins: string[];
   roomStore: RoomStore;
 };
 
@@ -21,7 +21,7 @@ function roomChannel(roomId: string): string {
 export function createSocketServer(httpServer: HttpServer, options: SignalingOptions): Server {
   const io = new Server(httpServer, {
     cors: {
-      origin: options.clientOrigin
+      origin: options.clientOrigins
     }
   });
 

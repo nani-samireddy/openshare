@@ -12,7 +12,7 @@ afterEach(async () => {
 
 describe("server HTTP API", () => {
   it("returns health", async () => {
-    server = await buildServer({ port: 0, clientOrigin: "http://localhost:5173", roomTtlMinutes: 30 });
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
 
     const response = await server.app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
@@ -20,17 +20,32 @@ describe("server HTTP API", () => {
   });
 
   it("creates rooms", async () => {
-    server = await buildServer({ port: 0, clientOrigin: "http://localhost:5173", roomTtlMinutes: 30 });
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
 
     const response = await server.app.inject({ method: "POST", url: "/rooms" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ roomId: expect.stringMatching(/^[A-Za-z0-9_-]{6}$/) });
   });
+
+  it("returns public WebRTC config", async () => {
+    server = await buildServer({
+      port: 0,
+      clientOrigins: ["http://localhost:5173"],
+      iceServers: [{ urls: "turn:turn.example.com:3478", username: "user", credential: "pass" }],
+      roomTtlMinutes: 30
+    });
+
+    const response = await server.app.inject({ method: "GET", url: "/config" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      iceServers: [{ urls: "turn:turn.example.com:3478", username: "user", credential: "pass" }]
+    });
+  });
 });
 
 describe("signaling", () => {
   it("broadcasts room state when a viewer joins", async () => {
-    server = await buildServer({ port: 0, clientOrigin: "http://localhost:5173", roomTtlMinutes: 30 });
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
     await server.app.listen({ port: 0 });
     const address = server.app.server.address();
     if (!address || typeof address === "string") {

@@ -1,6 +1,6 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
-import { type CreateRoomResponse, type HealthResponse, isValidRoomId } from "@openshare/shared";
+import { type CreateRoomResponse, type HealthResponse, type PublicConfigResponse, isValidRoomId } from "@openshare/shared";
 import { RoomStore } from "./rooms/room-store.js";
 import { createSocketServer } from "./signaling/socket-server.js";
 import type { ServerEnv } from "./env.js";
@@ -16,10 +16,14 @@ export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
   const roomStore = new RoomStore();
 
   await app.register(cors, {
-    origin: env.clientOrigin
+    origin: env.clientOrigins
   });
 
   app.get<{ Reply: HealthResponse }>("/health", async () => ({ status: "ok" }));
+
+  app.get<{ Reply: PublicConfigResponse }>("/config", async () => ({
+    iceServers: env.iceServers
+  }));
 
   app.post<{ Reply: CreateRoomResponse }>("/rooms", async () => {
     const room = roomStore.createRoom();
@@ -36,7 +40,7 @@ export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
   });
 
   const io = createSocketServer(app.server, {
-    clientOrigin: env.clientOrigin,
+    clientOrigins: env.clientOrigins,
     roomStore
   });
 

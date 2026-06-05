@@ -9,10 +9,12 @@ import { HostControls } from "../components/HostControls";
 import { RoomStatus } from "../components/RoomStatus";
 import { ScreenVideo } from "../components/ScreenVideo";
 import { ViewerCount } from "../components/ViewerCount";
+import { WebRTCStatusBadge } from "../components/WebRTCStatusBadge";
+import { usePublicConfig } from "../hooks/usePublicConfig";
 import { useRoom } from "../hooks/useRoom";
 import { useScreenShare } from "../hooks/useScreenShare";
 import { useSocket } from "../hooks/useSocket";
-import { useWebRTC } from "../hooks/useWebRTC";
+import { type WebRTCConnectionState, useWebRTC } from "../hooks/useWebRTC";
 
 export function RoomPage() {
   const { roomId = "" } = useParams();
@@ -22,15 +24,19 @@ export function RoomPage() {
   const inviteUrl = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const { socket, connected } = useSocket();
   const { roomState, error: roomError } = useRoom(socket, roomId, role);
+  const { iceServers, error: configError } = usePublicConfig();
   const screenShare = useScreenShare();
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [webRTCState, setWebRTCState] = useState<WebRTCConnectionState>("idle");
   const wasSharingRef = useRef(false);
 
   useWebRTC({
     socket,
     roomId,
     role,
+    iceServers,
     localStream: screenShare.stream,
+    onConnectionState: setWebRTCState,
     onRemoteStream: setRemoteStream
   });
 
@@ -92,6 +98,7 @@ export function RoomPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <ConnectionStateBadge connected={connected} />
+            <WebRTCStatusBadge state={webRTCState} />
             <ViewerCount count={roomState.viewerCount} />
           </div>
         </header>
@@ -100,7 +107,17 @@ export function RoomPage() {
           <div className="flex flex-col gap-4">
             <ScreenVideo stream={visibleStream} label={videoLabel} />
             <RoomStatus state={roomState.state} role={role} />
-            {screenShare.error ? (
+            {webRTCState === "failed" ? (
+              <div className="rounded-md border-2 border-ink bg-coral px-4 py-3 text-sm font-bold text-ink shadow-soft">
+                Peer connection failed. Try refreshing both room pages, or add a TURN server for stricter networks.
+              </div>
+            ) : null}
+            {configError ? (
+              <div className="rounded-md border-2 border-ink bg-cream px-4 py-3 text-sm font-bold text-ink shadow-soft">
+                {configError}
+              </div>
+            ) : null}
+            {role === "host" && screenShare.error ? (
               <div className="rounded-md border-2 border-ink bg-coral px-4 py-3 text-sm font-bold text-ink shadow-soft">
                 {screenShare.error}
               </div>

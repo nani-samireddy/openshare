@@ -63,3 +63,7 @@ export type CreateRoomResponse = {
 export type HealthResponse = {
   status: "ok";
 };
+
+export type PublicConfigResponse = {
+  iceServers: RTCIceServer[];
+};

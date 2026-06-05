@@ -1,14 +1,24 @@
 import "dotenv/config";
-import { DEFAULT_CLIENT_ORIGIN, DEFAULT_ROOM_TTL_MINUTES } from "@openshare/shared";
+import { DEFAULT_CLIENT_ORIGIN, DEFAULT_ICE_SERVERS, DEFAULT_ROOM_TTL_MINUTES } from "@openshare/shared";
 
 export type ServerEnv = {
   port: number;
-  clientOrigin: string;
+  clientOrigins: string[];
+  iceServers: RTCIceServer[];
   roomTtlMinutes: number;
 };
 
 function normalizeOrigin(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function parseClientOrigins(value: string | undefined): string[] {
+  const origins = (value ?? DEFAULT_CLIENT_ORIGIN)
+    .split(",")
+    .map((origin) => normalizeOrigin(origin.trim()))
+    .filter(Boolean);
+
+  return origins.length > 0 ? origins : [DEFAULT_CLIENT_ORIGIN];
 }
 
 function parsePort(value: string | undefined): number {
@@ -27,10 +37,27 @@ function parsePositiveNumber(value: string | undefined, fallback: number): numbe
   return parsed;
 }
 
+function parseIceServers(): RTCIceServer[] {
+  const turnUrl = process.env.TURN_URL?.trim();
+  if (!turnUrl) {
+    return DEFAULT_ICE_SERVERS;
+  }
+
+  return [
+    ...DEFAULT_ICE_SERVERS,
+    {
+      urls: turnUrl,
+      username: process.env.TURN_USERNAME || undefined,
+      credential: process.env.TURN_PASSWORD || undefined
+    }
+  ];
+}
+
 export function loadEnv(): ServerEnv {
   return {
     port: parsePort(process.env.PORT),
-    clientOrigin: normalizeOrigin(process.env.CLIENT_ORIGIN ?? DEFAULT_CLIENT_ORIGIN),
+    clientOrigins: parseClientOrigins(process.env.CLIENT_ORIGIN),
+    iceServers: parseIceServers(),
     roomTtlMinutes: parsePositiveNumber(process.env.ROOM_TTL_MINUTES, DEFAULT_ROOM_TTL_MINUTES)
   };
 }

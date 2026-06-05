@@ -37,6 +37,7 @@ Default local URLs:
 - Web: `http://localhost:5173`
 - Server: `http://localhost:4000`
 - Health check: `http://localhost:4000/health`
+- Public client config: `http://localhost:4000/config`
 
 ## Environment
 
@@ -47,9 +48,14 @@ PORT=4000
 CLIENT_ORIGIN=http://localhost:5173
 ROOM_TTL_MINUTES=30
 VITE_SIGNALING_URL=http://localhost:4000
+TURN_URL=
+TURN_USERNAME=
+TURN_PASSWORD=
 ```
 
-`CLIENT_ORIGIN` must match the deployed web origin for CORS and Socket.IO. `VITE_SIGNALING_URL` must point the web app at the deployed server.
+`CLIENT_ORIGIN` must match the deployed web origin for CORS and Socket.IO. Use a comma-separated list when you need both production and preview origins. `VITE_SIGNALING_URL` must point the web app at the deployed server.
+
+TURN settings are optional. When `TURN_URL` is set, the server exposes it through `GET /config` and clients use it in `RTCPeerConnection` alongside the default STUN server.
 
 ## Scripts
 

@@ -1,4 +1,4 @@
-import type { CreateRoomResponse } from "@openshare/shared";
+import type { CreateRoomResponse, PublicConfigResponse } from "@openshare/shared";
 import { getSignalingUrl } from "./config";
 
 export async function createRoom(): Promise<CreateRoomResponse> {
@@ -11,4 +11,14 @@ export async function createRoom(): Promise<CreateRoomResponse> {
   }
 
   return (await response.json()) as CreateRoomResponse;
+}
+
+export async function getPublicConfig(): Promise<PublicConfigResponse> {
+  const response = await fetch(`${getSignalingUrl()}/config`);
+
+  if (!response.ok) {
+    throw new Error("Unable to load connection config.");
+  }
+
+  return (await response.json()) as PublicConfigResponse;
 }
