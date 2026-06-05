@@ -94,3 +94,4 @@ The MVP uses direct P2P WebRTC with a public Google STUN server. This is simple 
 4. Start sharing from the host browser.
 5. Confirm the viewer sees the host screen.
 6. Stop sharing and confirm viewers see the stopped state.
+7.
