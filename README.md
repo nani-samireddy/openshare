@@ -8,6 +8,8 @@ Rooms can require host approval or run in open mode. Open rooms still require vi
 
 Hosts and approved viewers can draw temporary annotations over the shared screen. The host can disable viewer drawing or clear all annotations, and completed strokes fade after five seconds.
 
+Rooms can also use passwords, live locking, viewer limits, reusable links, and host-controlled viewer removal. A private host token is saved in the creating browser and is never included in viewer invite links.
+
 ## Stack
 
 - React, Vite, TypeScript, TailwindCSS
@@ -67,6 +69,8 @@ Upstash Redis is optional locally and recommended in production. Create an Upsta
 
 Redis stores room existence, access mode, annotation permission, and inactivity timestamps. Live Socket.IO memberships remain process-local because browser socket IDs do not survive restarts. After a server restart, saved rooms remain available, but hosts and viewers reconnect as new participants.
 
+Reusable rooms remain available when the host explicitly leaves, until their inactivity TTL expires. One-time rooms are deleted when the host uses `Leave room`. Passwords and private host tokens are stored only as salted hashes.
+
 ## Scripts
 
 ```bash
@@ -89,7 +93,7 @@ The MVP uses direct P2P WebRTC with a public Google STUN server. This is simple 
 
 ## MVP Limitations
 
-- No authentication
+- No user accounts or cross-device host-token recovery
 - No long-term room history or user accounts
 - No recording
 - No chat

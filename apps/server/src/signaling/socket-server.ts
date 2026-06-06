@@ -3,6 +3,9 @@ import { Server } from "socket.io";
 import {
   ANNOTATION_COLORS,
   ANNOTATION_MAX_POINTS_PER_SEGMENT,
+  MAX_ROOM_PASSWORD_LENGTH,
+  MAX_VIEWER_LIMIT,
+  MIN_ROOM_PASSWORD_LENGTH,
   ROOM_ACCESS_MODES,
   SOCKET_EVENTS,
   type AnnotationClearPayload,
@@ -14,9 +17,12 @@ import {
   type RoomAccessModePayload,
   type RoomJoinAck,
   type RoomJoinPayload,
+  type RoomSecurityPayload,
+  type ViewerKickPayload,
   type ViewerApprovalBulkPayload
 } from "@openshare/shared";
 import type { RoomStore } from "../rooms/room-store.js";
+import { hashSecret } from "../rooms/room-security.js";
 
 type SignalingOptions = {
   clientOrigins: string[];
@@ -38,6 +44,10 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
 
   function emitRoomState(roomId: string): void {
     io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId));
+    const hostSocketId = roomStore.getHostSocketId(roomId);
+    if (hostSocketId) {
+      io.to(hostSocketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId, undefined, true));
+    }
   }
 
   function admitViewer(roomId: string, requestId: string, hostSocketId?: string): void {
@@ -115,9 +125,9 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     socket.on(SOCKET_EVENTS.ROOM_JOIN, (payload: RoomJoinPayload, ack?: (result: RoomJoinAck) => void) => {
       try {
         if (payload.role === "host") {
-          const room = roomStore.joinHost(payload.roomId, socket.id);
+          const room = roomStore.joinHost(payload.roomId, socket.id, payload.hostToken);
           socket.join(roomChannel(room.id));
-          socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id));
+          socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, undefined, true));
           for (const pendingViewer of room.pendingViewers.values()) {
             socket.emit(SOCKET_EVENTS.VIEWER_REQUESTED, {
               roomId: room.id,
@@ -130,7 +140,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
           return;
         }
 
-        const { room, requestId } = roomStore.requestViewerJoin(payload.roomId, socket.id, payload.displayName ?? "");
+        const { room, requestId } = roomStore.requestViewerJoin(payload.roomId, socket.id, payload.displayName ?? "", payload.password);
         if (room.accessMode === ROOM_ACCESS_MODES.OPEN) {
           admitViewer(room.id, requestId);
           ack?.({ ok: true, status: "joined" });
@@ -195,6 +205,51 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
         processAllPending(payload.roomId, "approve", socket.id);
       }
       emitRoomState(payload.roomId);
+    });
+
+    socket.on(SOCKET_EVENTS.ROOM_SECURITY, (payload: RoomSecurityPayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      const password = payload.password?.trim();
+      if (password && (password.length < MIN_ROOM_PASSWORD_LENGTH || password.length > MAX_ROOM_PASSWORD_LENGTH)) {
+        return;
+      }
+
+      roomStore.setSecurity(payload.roomId, {
+        locked: payload.locked,
+        viewerLimit:
+          payload.viewerLimit === undefined ? undefined : Math.min(MAX_VIEWER_LIMIT, Math.max(1, Math.round(payload.viewerLimit))),
+        passwordHash: payload.clearPassword ? null : password ? hashSecret(password) : undefined,
+        persistent: payload.persistent
+      });
+      emitRoomState(payload.roomId);
+    });
+
+    socket.on(SOCKET_EVENTS.VIEWER_KICK, (payload: ViewerKickPayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      try {
+        const viewer = roomStore.kickViewer(payload.roomId, payload.viewerId);
+        io.to(viewer.socketId).emit(SOCKET_EVENTS.VIEWER_KICKED, {
+          roomId: payload.roomId,
+          reason: "The host removed you from the room."
+        });
+        socketFor(io, viewer.socketId)?.leave(roomChannel(payload.roomId));
+        socket.emit(SOCKET_EVENTS.VIEWER_LEFT, {
+          roomId: payload.roomId,
+          viewerId: payload.viewerId,
+          displayName: viewer.displayName
+        });
+        emitRoomState(payload.roomId);
+      } catch {
+        return;
+      }
     });
 
     socket.on(SOCKET_EVENTS.ANNOTATION_STROKE, (payload: AnnotationStrokePayload | undefined) => {
@@ -332,18 +387,11 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
 
     const { roomId } = membership;
     if (membership.role === "host") {
-      if (roomStore.getRoom(roomId)) {
-        io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, {
-          roomId,
-          state: "host_disconnected",
-          accessMode: roomStore.getRoom(roomId)?.accessMode ?? ROOM_ACCESS_MODES.APPROVAL,
-          viewerDrawingEnabled: roomStore.getRoom(roomId)?.viewerDrawingEnabled ?? true,
-          viewerCount: roomStore.getRoom(roomId)?.viewers.size ?? 0,
-          isHostPresent: false,
-          isSharing: false
-        });
+      const room = roomStore.getRoom(roomId);
+      if (room) {
+        io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId));
         io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.HOST_STOPPED_SHARING, { roomId });
-        if (!isDisconnect) {
+        if (!isDisconnect && !room.persistent) {
           roomStore.deleteRoom(roomId);
         }
       }

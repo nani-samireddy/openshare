@@ -8,6 +8,7 @@ import {
   type RoomJoinAck,
   type RoomStatePayload,
   type ViewerDeniedPayload,
+  type ViewerKickedPayload,
   type ViewerRequestedPayload
 } from "@openshare/shared";
 import { buildServer, type OpenShareServer } from "../app.js";
@@ -35,7 +36,8 @@ describe("server HTTP API", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       roomId: expect.stringMatching(/^[A-Za-z0-9_-]{6}$/),
-      accessMode: ROOM_ACCESS_MODES.APPROVAL
+      accessMode: ROOM_ACCESS_MODES.APPROVAL,
+      hostToken: expect.stringMatching(/^[A-Za-z0-9_-]+$/)
     });
   });
 
@@ -217,6 +219,72 @@ describe("signaling", () => {
     }
   });
 
+  it("protects host ownership and password-gated rooms", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    const response = await server.app.inject({
+      method: "POST",
+      url: "/rooms",
+      payload: { accessMode: ROOM_ACCESS_MODES.OPEN, password: "secret-room", viewerLimit: 2, persistent: true }
+    });
+    const created = response.json() as { roomId: string; hostToken: string };
+    await server.app.listen({ port: 0 });
+    const host = createClient(getServerUrl(server), { transports: ["websocket"] });
+    const viewer = createClient(getServerUrl(server), { transports: ["websocket"] });
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer)]);
+      expect((await emitJoin(host, { roomId: created.roomId, role: "host", hostToken: "wrong" })).ok).toBe(false);
+      expect((await emitJoin(host, { roomId: created.roomId, role: "host", hostToken: created.hostToken })).ok).toBe(true);
+      expect((await emitJoin(viewer, { roomId: created.roomId, role: "viewer", displayName: "Nani", password: "wrong" })).ok).toBe(false);
+      expect((await emitJoin(viewer, { roomId: created.roomId, role: "viewer", displayName: "Nani", password: "secret-room" })).status).toBe(
+        "joined"
+      );
+    } finally {
+      host.close();
+      viewer.close();
+    }
+  });
+
+  it("lets only hosts lock rooms and kick viewers", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const url = getServerUrl(server);
+    const host = createClient(url, { transports: ["websocket"] });
+    const viewer = createClient(url, { transports: ["websocket"] });
+    const lateViewer = createClient(url, { transports: ["websocket"] });
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer), waitForConnect(lateViewer)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      const hostStatePromise = waitForEventWhere<RoomStatePayload>(
+        host,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.viewers.length === 1
+      );
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+      const hostState = await hostStatePromise;
+      expect(hostState.viewers[0]?.displayName).toBe("Nani");
+
+      viewer.emit(SOCKET_EVENTS.ROOM_SECURITY, { roomId: room.id, locked: true });
+      await delay(20);
+      expect(server.roomStore.getState(room.id).locked).toBe(false);
+
+      host.emit(SOCKET_EVENTS.ROOM_SECURITY, { roomId: room.id, locked: true });
+      await delay(20);
+      expect((await emitJoin(lateViewer, { roomId: room.id, role: "viewer", displayName: "Late" })).ok).toBe(false);
+
+      const kicked = waitForEventWhere<ViewerKickedPayload>(viewer, SOCKET_EVENTS.VIEWER_KICKED, (payload) => payload.roomId === room.id);
+      host.emit(SOCKET_EVENTS.VIEWER_KICK, { roomId: room.id, viewerId: hostState.viewers[0]!.viewerId });
+      expect((await kicked).reason).toContain("removed");
+      expect(server.roomStore.getState(room.id).viewerCount).toBe(0);
+    } finally {
+      host.close();
+      viewer.close();
+      lateViewer.close();
+    }
+  });
+
   it("relays annotations from hosts and approved viewers while sharing", async () => {
     server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
     await server.app.listen({ port: 0 });
@@ -321,7 +389,10 @@ function waitForConnect(socket: Socket): Promise<void> {
   });
 }
 
-function emitJoin(socket: Socket, payload: { roomId: string; role: "host" | "viewer"; displayName?: string }): Promise<RoomJoinAck> {
+function emitJoin(
+  socket: Socket,
+  payload: { roomId: string; role: "host" | "viewer"; displayName?: string; password?: string; hostToken?: string }
+): Promise<RoomJoinAck> {
   return new Promise((resolve) => {
     socket.emit(SOCKET_EVENTS.ROOM_JOIN, payload, (ack: RoomJoinAck) => resolve(ack));
   });

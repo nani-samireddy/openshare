@@ -4,6 +4,11 @@ export type PersistedRoom = {
   id: string;
   accessMode: RoomAccessMode;
   viewerDrawingEnabled: boolean;
+  passwordHash?: string | null;
+  hostTokenHash?: string | null;
+  locked?: boolean;
+  viewerLimit?: number;
+  persistent?: boolean;
   wasSharing: boolean;
   createdAt: number;
   updatedAt: number;

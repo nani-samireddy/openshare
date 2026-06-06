@@ -11,7 +11,8 @@ export async function createRoom(request: CreateRoomRequest = {}): Promise<Creat
   });
 
   if (!response.ok) {
-    throw new Error("Unable to create a room. Please try again.");
+    const result = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(result?.message ?? "Unable to create a room. Please try again.");
   }
 
   return (await response.json()) as CreateRoomResponse;

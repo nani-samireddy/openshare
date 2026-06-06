@@ -7,7 +7,8 @@ import {
   type RoomRole,
   type RoomStatePayload,
   type ViewerApprovedPayload,
-  type ViewerDeniedPayload
+  type ViewerDeniedPayload,
+  type ViewerKickedPayload
 } from "@openshare/shared";
 import type { Socket } from "socket.io-client";
 
@@ -24,17 +25,24 @@ type UseRoomOptions = {
   roomId: string;
   role: RoomRole;
   displayName?: string;
+  password?: string;
+  hostToken?: string;
   shouldJoin: boolean;
 };
 
-export function useRoom({ socket, roomId, role, displayName, shouldJoin }: UseRoomOptions): UseRoomResult {
+export function useRoom({ socket, roomId, role, displayName, password, hostToken, shouldJoin }: UseRoomOptions): UseRoomResult {
   const initialState = useMemo<RoomStatePayload>(
     () => ({
       roomId,
       state: ROOM_STATES.WAITING_FOR_HOST,
       accessMode: ROOM_ACCESS_MODES.APPROVAL,
       viewerDrawingEnabled: true,
+      locked: false,
+      hasPassword: false,
+      viewerLimit: 20,
+      persistent: false,
       viewerCount: 0,
+      viewers: [],
       isHostPresent: false,
       isSharing: false
     }),
@@ -72,10 +80,18 @@ export function useRoom({ socket, roomId, role, displayName, shouldJoin }: UseRo
       }
     }
 
+    function handleKicked(payload: ViewerKickedPayload) {
+      if (payload.roomId === roomId) {
+        setApprovalState("denied");
+        setError(payload.reason);
+      }
+    }
+
     socket.on(SOCKET_EVENTS.ROOM_STATE, handleState);
     socket.on(SOCKET_EVENTS.VIEWER_APPROVED, handleApproved);
     socket.on(SOCKET_EVENTS.VIEWER_DENIED, handleDenied);
-    socket.emit(SOCKET_EVENTS.ROOM_JOIN, { roomId, role, displayName }, (result: RoomJoinAck) => {
+    socket.on(SOCKET_EVENTS.VIEWER_KICKED, handleKicked);
+    socket.emit(SOCKET_EVENTS.ROOM_JOIN, { roomId, role, displayName, password, hostToken }, (result: RoomJoinAck) => {
       if (!result.ok) {
         setError(result.error ?? "Unable to join room");
         setApprovalState("denied");
@@ -93,8 +109,9 @@ export function useRoom({ socket, roomId, role, displayName, shouldJoin }: UseRo
       socket.off(SOCKET_EVENTS.ROOM_STATE, handleState);
       socket.off(SOCKET_EVENTS.VIEWER_APPROVED, handleApproved);
       socket.off(SOCKET_EVENTS.VIEWER_DENIED, handleDenied);
+      socket.off(SOCKET_EVENTS.VIEWER_KICKED, handleKicked);
     };
-  }, [displayName, initialState, role, roomId, shouldJoin, socket]);
+  }, [displayName, hostToken, initialState, password, role, roomId, shouldJoin, socket]);
 
   return { roomState, error, approvalState };
 }

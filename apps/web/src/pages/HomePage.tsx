@@ -1,15 +1,19 @@
-import { Github, LockKeyhole, MonitorUp, Users } from "lucide-react";
+import { Github, LockKeyhole, MonitorUp, RefreshCw, Users } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ROOM_ACCESS_MODES, type RoomAccessMode } from "@openshare/shared";
 import { Button } from "../components/Button";
 import { createRoom } from "../lib/api";
+import { saveHostToken } from "../lib/hostSession";
 import { SCREEN_SHARE_UNSUPPORTED_MESSAGE, supportsScreenSharing } from "../lib/screenShareSupport";
 
 export function HomePage() {
   const navigate = useNavigate();
   const canHostFromBrowser = supportsScreenSharing();
   const [accessMode, setAccessMode] = useState<RoomAccessMode>(ROOM_ACCESS_MODES.APPROVAL);
+  const [password, setPassword] = useState("");
+  const [viewerLimit, setViewerLimit] = useState(20);
+  const [persistent, setPersistent] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(canHostFromBrowser ? null : SCREEN_SHARE_UNSUPPORTED_MESSAGE);
 
@@ -23,7 +27,8 @@ export function HomePage() {
     setError(null);
 
     try {
-      const { roomId } = await createRoom({ accessMode });
+      const { roomId, hostToken } = await createRoom({ accessMode, password: password.trim() || undefined, viewerLimit, persistent });
+      saveHostToken(roomId, hostToken);
       navigate(`/room/${roomId}?role=host`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create a room. Please try again.");
@@ -72,6 +77,43 @@ export function HomePage() {
                 Open room
               </button>
             </div>
+          </div>
+
+          <div className="mt-4 grid max-w-xl gap-3 sm:grid-cols-2">
+            <label className="text-xs font-extrabold uppercase tracking-wider text-ink/70">
+              Optional password
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                minLength={4}
+                maxLength={64}
+                placeholder="At least 4 characters"
+                className="mt-2 min-h-11 w-full rounded-md border-2 border-ink bg-white px-3 text-sm font-bold normal-case text-ink outline-none focus:ring-4 focus:ring-sun/60"
+              />
+            </label>
+            <label className="text-xs font-extrabold uppercase tracking-wider text-ink/70">
+              Viewer limit
+              <input
+                type="number"
+                value={viewerLimit}
+                onChange={(event) => setViewerLimit(Math.min(100, Math.max(1, Number(event.target.value))))}
+                min={1}
+                max={100}
+                className="mt-2 min-h-11 w-full rounded-md border-2 border-ink bg-white px-3 text-sm font-bold text-ink outline-none focus:ring-4 focus:ring-sun/60"
+              />
+            </label>
+            <button
+              type="button"
+              aria-pressed={persistent}
+              onClick={() => setPersistent((current) => !current)}
+              className={`flex min-h-11 items-center justify-center gap-2 rounded-md border-2 border-ink px-3 text-sm font-extrabold sm:col-span-2 ${
+                persistent ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-cream"
+              }`}
+            >
+              <RefreshCw aria-hidden className="h-4 w-4" />
+              {persistent ? "Reusable room enabled" : "Make room reusable"}
+            </button>
           </div>
 
           <div className="mt-8 flex flex-wrap items-center gap-4">

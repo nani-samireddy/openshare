@@ -18,17 +18,24 @@ export const ROOM_ACCESS_MODES = {
 export const ANNOTATION_COLORS = ["#F9BD18", "#F26F5B", "#4698CC", "#F5EFDF", "#26304F"] as const;
 export const ANNOTATION_FADE_MS = 5000;
 export const ANNOTATION_MAX_POINTS_PER_SEGMENT = 64;
+export const DEFAULT_VIEWER_LIMIT = 20;
+export const MAX_VIEWER_LIMIT = 100;
+export const MIN_ROOM_PASSWORD_LENGTH = 4;
+export const MAX_ROOM_PASSWORD_LENGTH = 64;
 
 export const SOCKET_EVENTS = {
   ROOM_JOIN: "room:join",
   ROOM_LEAVE: "room:leave",
   ROOM_STATE: "room:state",
   ROOM_ACCESS_MODE: "room:access-mode",
+  ROOM_SECURITY: "room:security",
   VIEWER_REQUESTED: "viewer:requested",
   VIEWER_APPROVAL: "viewer:approval",
   VIEWER_APPROVAL_BULK: "viewer:approval-bulk",
   VIEWER_APPROVED: "viewer:approved",
   VIEWER_DENIED: "viewer:denied",
+  VIEWER_KICK: "viewer:kick",
+  VIEWER_KICKED: "viewer:kicked",
   ANNOTATION_STROKE: "annotation:stroke",
   ANNOTATION_CLEAR: "annotation:clear",
   ANNOTATION_VIEWER_DRAWING: "annotation:viewer-drawing",

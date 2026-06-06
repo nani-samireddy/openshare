@@ -1,4 +1,4 @@
-import { CheckCheck, LogOut, Pencil, ShieldCheck, Users, X } from "lucide-react";
+import { CheckCheck, KeyRound, LockKeyhole, LogOut, Pencil, RefreshCw, ShieldCheck, UserMinus, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -23,16 +23,22 @@ import { useRoom } from "../hooks/useRoom";
 import { useScreenShare } from "../hooks/useScreenShare";
 import { useSocket } from "../hooks/useSocket";
 import { type WebRTCConnectionState, useWebRTC } from "../hooks/useWebRTC";
+import { getHostToken } from "../lib/hostSession";
 
 export function RoomPage() {
   const { roomId = "" } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const role: RoomRole = searchParams.get("role") === "host" ? "host" : "viewer";
+  const hostToken = useMemo(() => getHostToken(roomId), [roomId]);
+  const role: RoomRole = searchParams.get("role") === "host" && hostToken ? "host" : "viewer";
   const inviteUrl = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const { socket, connected } = useSocket();
   const [viewerNameInput, setViewerNameInput] = useState("");
   const [viewerDisplayName, setViewerDisplayName] = useState("");
+  const [viewerPasswordInput, setViewerPasswordInput] = useState("");
+  const [viewerPassword, setViewerPassword] = useState("");
+  const [newRoomPassword, setNewRoomPassword] = useState("");
+  const [viewerLimitInput, setViewerLimitInput] = useState(20);
   const [hasRequestedJoin, setHasRequestedJoin] = useState(role === "host");
   const [pendingRequests, setPendingRequests] = useState<ViewerRequestedPayload[]>([]);
   const { roomState, error: roomError, approvalState } = useRoom({
@@ -40,6 +46,8 @@ export function RoomPage() {
     roomId,
     role,
     displayName: viewerDisplayName,
+    password: viewerPassword,
+    hostToken,
     shouldJoin: role === "host" || hasRequestedJoin
   });
   const { iceServers, error: configError } = usePublicConfig();
@@ -47,6 +55,10 @@ export function RoomPage() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [webRTCState, setWebRTCState] = useState<WebRTCConnectionState>("idle");
   const wasSharingRef = useRef(false);
+
+  useEffect(() => {
+    setViewerLimitInput(roomState.viewerLimit);
+  }, [roomState.viewerLimit]);
 
   useWebRTC({
     socket,
@@ -126,6 +138,7 @@ export function RoomPage() {
     }
 
     setViewerDisplayName(nextName.slice(0, 40));
+    setViewerPassword(viewerPasswordInput);
     setHasRequestedJoin(true);
   }
 
@@ -150,8 +163,29 @@ export function RoomPage() {
     socket.emit(SOCKET_EVENTS.ANNOTATION_VIEWER_DRAWING, { roomId, enabled });
   }
 
+  function handleSecurity(settings: { locked?: boolean; viewerLimit?: number; password?: string; clearPassword?: boolean; persistent?: boolean }) {
+    socket.emit(SOCKET_EVENTS.ROOM_SECURITY, { roomId, ...settings });
+  }
+
+  function handleSetPassword() {
+    const password = newRoomPassword.trim();
+    if (password.length < 4) {
+      return;
+    }
+    handleSecurity({ password });
+    setNewRoomPassword("");
+  }
+
+  function handleKickViewer(viewerId: string) {
+    socket.emit(SOCKET_EVENTS.VIEWER_KICK, { roomId, viewerId });
+  }
+
   if (!isValidRoomId(roomId)) {
     return <RoomShell message="This room link is invalid." />;
+  }
+
+  if (role === "host" && approvalState === "denied") {
+    return <RoomShell message={roomError ?? "This browser is not authorized to host the room."} />;
   }
 
   const visibleStream = role === "host" ? screenShare.stream : remoteStream;
@@ -184,6 +218,18 @@ export function RoomPage() {
                   onChange={(event) => setViewerNameInput(event.target.value)}
                   maxLength={40}
                   placeholder="Nani"
+                  className="min-h-12 rounded-md border-2 border-ink bg-white px-4 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-sun/60"
+                />
+                <label className="text-sm font-extrabold text-ink" htmlFor="viewer-password">
+                  Room password <span className="text-ink/60">(if required)</span>
+                </label>
+                <input
+                  id="viewer-password"
+                  type="password"
+                  value={viewerPasswordInput}
+                  onChange={(event) => setViewerPasswordInput(event.target.value)}
+                  maxLength={64}
+                  placeholder="Room password"
                   className="min-h-12 rounded-md border-2 border-ink bg-white px-4 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-sun/60"
                 />
                 <Button type="submit" disabled={!viewerNameInput.trim()}>
@@ -303,6 +349,78 @@ export function RoomPage() {
                 )}
                 {role === "host" ? (
                   <div className="rounded-md border-2 border-ink bg-cream p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Room security</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        aria-pressed={roomState.locked}
+                        onClick={() => handleSecurity({ locked: !roomState.locked })}
+                        className={`flex min-h-11 items-center justify-center gap-2 rounded-md border-2 border-ink px-2 text-xs font-extrabold ${
+                          roomState.locked ? "bg-coral shadow-[3px_3px_0_#26304f]" : "bg-white"
+                        }`}
+                      >
+                        <LockKeyhole aria-hidden className="h-4 w-4" />
+                        {roomState.locked ? "Locked" : "Unlocked"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={roomState.persistent}
+                        onClick={() => handleSecurity({ persistent: !roomState.persistent })}
+                        className={`flex min-h-11 items-center justify-center gap-2 rounded-md border-2 border-ink px-2 text-xs font-extrabold ${
+                          roomState.persistent ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-white"
+                        }`}
+                      >
+                        <RefreshCw aria-hidden className="h-4 w-4" />
+                        {roomState.persistent ? "Reusable" : "One-time"}
+                      </button>
+                    </div>
+                    <label className="mt-3 block text-xs font-extrabold text-ink/75">
+                      Viewer limit
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={viewerLimitInput}
+                        onChange={(event) => setViewerLimitInput(Math.min(100, Math.max(1, Number(event.target.value))))}
+                        onBlur={() => handleSecurity({ viewerLimit: viewerLimitInput })}
+                        className="mt-1 min-h-10 w-full rounded-md border-2 border-ink bg-white px-3 font-bold text-ink"
+                      />
+                    </label>
+                    <div className="mt-3 flex gap-2">
+                      <input
+                        type="password"
+                        value={newRoomPassword}
+                        onChange={(event) => setNewRoomPassword(event.target.value)}
+                        maxLength={64}
+                        placeholder={roomState.hasPassword ? "Replace password" : "Set password"}
+                        className="min-h-10 min-w-0 flex-1 rounded-md border-2 border-ink bg-white px-3 text-xs font-bold text-ink"
+                      />
+                      <button
+                        type="button"
+                        aria-label="Set room password"
+                        title="Set room password"
+                        disabled={newRoomPassword.trim().length < 4}
+                        onClick={handleSetPassword}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-md border-2 border-ink bg-sun disabled:opacity-50"
+                      >
+                        <KeyRound aria-hidden className="h-4 w-4" />
+                      </button>
+                      {roomState.hasPassword ? (
+                        <button
+                          type="button"
+                          aria-label="Remove room password"
+                          title="Remove room password"
+                          onClick={() => handleSecurity({ clearPassword: true })}
+                          className="inline-flex h-10 w-10 items-center justify-center rounded-md border-2 border-ink bg-coral"
+                        >
+                          <X aria-hidden className="h-4 w-4" />
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {role === "host" ? (
+                  <div className="rounded-md border-2 border-ink bg-cream p-3">
                     <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Annotations</p>
                     <button
                       type="button"
@@ -356,6 +474,27 @@ export function RoomPage() {
                               Deny
                             </Button>
                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {role === "host" && roomState.viewers.length > 0 ? (
+                  <div className="rounded-md border-2 border-ink bg-cream p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Viewers</p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      {roomState.viewers.map((viewer) => (
+                        <div key={viewer.viewerId} className="flex items-center justify-between gap-3 rounded-md border-2 border-ink bg-white px-3 py-2">
+                          <span className="min-w-0 truncate text-sm font-extrabold text-ink">{viewer.displayName}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${viewer.displayName}`}
+                            title={`Remove ${viewer.displayName}`}
+                            onClick={() => handleKickViewer(viewer.viewerId)}
+                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-ink bg-coral"
+                          >
+                            <UserMinus aria-hidden className="h-4 w-4" />
+                          </button>
                         </div>
                       ))}
                     </div>

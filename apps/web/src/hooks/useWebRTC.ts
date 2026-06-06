@@ -248,11 +248,13 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
     socket.on(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
     socket.on(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, handleIce);
     socket.on(SOCKET_EVENTS.HOST_STOPPED_SHARING, handleHostStopped);
+    socket.on(SOCKET_EVENTS.VIEWER_KICKED, handleHostStopped);
 
     return () => {
       socket.off(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
       socket.off(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, handleIce);
       socket.off(SOCKET_EVENTS.HOST_STOPPED_SHARING, handleHostStopped);
+      socket.off(SOCKET_EVENTS.VIEWER_KICKED, handleHostStopped);
       closeAll();
     };
   }, [closeAll, iceServers, onConnectionState, onRemoteStream, role, roomId, socket]);

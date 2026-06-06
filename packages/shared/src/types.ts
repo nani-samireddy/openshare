@@ -31,6 +31,8 @@ export type RoomJoinPayload = {
   roomId: string;
   role: RoomRole;
   displayName?: string;
+  password?: string;
+  hostToken?: string;
 };
 
 export type RoomJoinAck = {
@@ -44,10 +46,20 @@ export type RoomStatePayload = {
   state: RoomState;
   accessMode: RoomAccessMode;
   viewerDrawingEnabled: boolean;
+  locked: boolean;
+  hasPassword: boolean;
+  viewerLimit: number;
+  persistent: boolean;
   viewerCount: number;
+  viewers: RoomViewer[];
   isHostPresent: boolean;
   isSharing: boolean;
   selfId?: string;
+};
+
+export type RoomViewer = {
+  viewerId: string;
+  displayName: string;
 };
 
 export type ViewerJoinedPayload = {
@@ -84,12 +96,31 @@ export type RoomAccessModePayload = {
   accessMode: RoomAccessMode;
 };
 
+export type RoomSecurityPayload = {
+  roomId: string;
+  locked?: boolean;
+  viewerLimit?: number;
+  password?: string;
+  clearPassword?: boolean;
+  persistent?: boolean;
+};
+
 export type ViewerApprovedPayload = {
   roomId: string;
   viewerId: string;
 };
 
 export type ViewerDeniedPayload = {
+  roomId: string;
+  reason: string;
+};
+
+export type ViewerKickPayload = {
+  roomId: string;
+  viewerId: string;
+};
+
+export type ViewerKickedPayload = {
   roomId: string;
   reason: string;
 };
@@ -126,10 +157,15 @@ export type ServerIceCandidatePayload = {
 export type CreateRoomResponse = {
   roomId: string;
   accessMode: RoomAccessMode;
+  hostToken: string;
 };
 
 export type CreateRoomRequest = {
   accessMode?: RoomAccessMode;
+  password?: string;
+  locked?: boolean;
+  viewerLimit?: number;
+  persistent?: boolean;
 };
 
 export type HealthResponse = {

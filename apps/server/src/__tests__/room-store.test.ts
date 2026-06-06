@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ROOM_ACCESS_MODES, ROOM_STATES } from "@openshare/shared";
 import type { PersistedRoom, RoomPersistence } from "../rooms/room-persistence.js";
+import { hashSecret } from "../rooms/room-security.js";
 import { RoomStore } from "../rooms/room-store.js";
 
 describe("RoomStore", () => {
@@ -63,6 +64,35 @@ describe("RoomStore", () => {
     expect(store.getState(room.id).viewerDrawingEnabled).toBe(false);
   });
 
+  it("enforces host tokens, passwords, locks, and viewer limits", () => {
+    const store = new RoomStore();
+    const room = store.createRoom({
+      hostTokenHash: hashSecret("host-secret"),
+      passwordHash: hashSecret("room-secret"),
+      viewerLimit: 1
+    });
+
+    expect(() => store.joinHost(room.id, "host", "wrong-secret")).toThrow("Invalid host token");
+    store.joinHost(room.id, "host", "host-secret");
+    expect(() => store.requestViewerJoin(room.id, "viewer-one", "One", "wrong-secret")).toThrow("Incorrect room password");
+    store.requestViewerJoin(room.id, "viewer-one", "One", "room-secret");
+    expect(() => store.requestViewerJoin(room.id, "viewer-two", "Two", "room-secret")).toThrow("This room is full");
+
+    store.setSecurity(room.id, { locked: true });
+    expect(() => store.requestViewerJoin(room.id, "viewer-three", "Three", "room-secret")).toThrow("This room is locked");
+  });
+
+  it("kicks approved viewers", () => {
+    const store = new RoomStore();
+    const room = store.createRoom();
+    const { requestId } = store.requestViewerJoin(room.id, "viewer", "Nani");
+    const { viewerId } = store.approveViewer(room.id, requestId);
+
+    expect(store.kickViewer(room.id, viewerId).displayName).toBe("Nani");
+    expect(store.getState(room.id).viewerCount).toBe(0);
+    expect(store.getMembership("viewer")).toBeUndefined();
+  });
+
   it("cleans up disconnected sockets and inactive rooms", () => {
     const store = new RoomStore();
     const room = store.createRoom(ROOM_ACCESS_MODES.APPROVAL, 1000);
@@ -96,6 +126,9 @@ describe("RoomStore", () => {
     expect(restoredRoom).toMatchObject({
       accessMode: ROOM_ACCESS_MODES.OPEN,
       viewerDrawingEnabled: false,
+      locked: false,
+      viewerLimit: 20,
+      persistent: false,
       hostSocketId: null,
       isSharing: false,
       wasSharing: true

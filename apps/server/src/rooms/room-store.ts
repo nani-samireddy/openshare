@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import {
   ROOM_ACCESS_MODES,
+  DEFAULT_VIEWER_LIMIT,
+  MAX_VIEWER_LIMIT,
   ROOM_ID_LENGTH,
   ROOM_STATES,
   type RoomAccessMode,
@@ -8,6 +10,7 @@ import {
   isValidRoomId
 } from "@openshare/shared";
 import type { PersistedRoom, RoomPersistence } from "./room-persistence.js";
+import { verifySecret } from "./room-security.js";
 
 export type ViewerRecord = {
   socketId: string;
@@ -25,10 +28,24 @@ export type Room = {
   pendingViewers: Map<string, PendingViewerRecord>;
   accessMode: RoomAccessMode;
   viewerDrawingEnabled: boolean;
+  passwordHash: string | null;
+  hostTokenHash: string | null;
+  locked: boolean;
+  viewerLimit: number;
+  persistent: boolean;
   isSharing: boolean;
   wasSharing: boolean;
   createdAt: number;
   updatedAt: number;
+};
+
+export type CreateRoomOptions = {
+  accessMode?: RoomAccessMode;
+  passwordHash?: string | null;
+  hostTokenHash?: string | null;
+  locked?: boolean;
+  viewerLimit?: number;
+  persistent?: boolean;
 };
 
 export type SocketRoomMembership = {
@@ -62,6 +79,11 @@ export class RoomStore {
 
       this.rooms.set(persistedRoom.id, {
         ...persistedRoom,
+        passwordHash: persistedRoom.passwordHash ?? null,
+        hostTokenHash: persistedRoom.hostTokenHash ?? null,
+        locked: persistedRoom.locked ?? false,
+        viewerLimit: this.normalizeViewerLimit(persistedRoom.viewerLimit),
+        persistent: persistedRoom.persistent ?? false,
         hostSocketId: null,
         viewers: new Map(),
         pendingViewers: new Map(),
@@ -74,7 +96,8 @@ export class RoomStore {
     await this.persistenceQueue;
   }
 
-  createRoom(accessMode: RoomAccessMode = ROOM_ACCESS_MODES.APPROVAL, now = Date.now()): Room {
+  createRoom(options: RoomAccessMode | CreateRoomOptions = ROOM_ACCESS_MODES.APPROVAL, now = Date.now()): Room {
+    const roomOptions: CreateRoomOptions = typeof options === "string" ? { accessMode: options } : options;
     let id = this.createRoomId();
     while (this.rooms.has(id)) {
       id = this.createRoomId();
@@ -85,8 +108,13 @@ export class RoomStore {
       hostSocketId: null,
       viewers: new Map(),
       pendingViewers: new Map(),
-      accessMode,
+      accessMode: roomOptions.accessMode ?? ROOM_ACCESS_MODES.APPROVAL,
       viewerDrawingEnabled: true,
+      passwordHash: roomOptions.passwordHash ?? null,
+      hostTokenHash: roomOptions.hostTokenHash ?? null,
+      locked: roomOptions.locked ?? false,
+      viewerLimit: this.normalizeViewerLimit(roomOptions.viewerLimit),
+      persistent: roomOptions.persistent ?? false,
       isSharing: false,
       wasSharing: false,
       createdAt: now,
@@ -113,21 +141,43 @@ export class RoomStore {
     return room;
   }
 
-  joinHost(roomId: string, socketId: string, now = Date.now()): Room {
+  joinHost(roomId: string, socketId: string, hostTokenOrNow: string | number | undefined = "", now = Date.now()): Room {
     const room = this.requireRoom(roomId);
+    const hostToken = typeof hostTokenOrNow === "string" ? hostTokenOrNow : "";
+    const joinedAt = typeof hostTokenOrNow === "number" ? hostTokenOrNow : now;
+    if (room.hostTokenHash && !verifySecret(hostToken, room.hostTokenHash)) {
+      throw new Error("Invalid host token");
+    }
     room.hostSocketId = socketId;
-    room.updatedAt = now;
+    room.updatedAt = joinedAt;
     this.socketMemberships.set(socketId, { roomId, role: "host" });
     this.queueSave(room);
     return room;
   }
 
-  requestViewerJoin(roomId: string, socketId: string, displayName: string, now = Date.now()): { room: Room; requestId: string } {
+  requestViewerJoin(
+    roomId: string,
+    socketId: string,
+    displayName: string,
+    passwordOrNow: string | number | undefined = "",
+    now = Date.now()
+  ): { room: Room; requestId: string } {
     const room = this.requireRoom(roomId);
+    const password = typeof passwordOrNow === "string" ? passwordOrNow : "";
+    const joinedAt = typeof passwordOrNow === "number" ? passwordOrNow : now;
+    if (room.locked) {
+      throw new Error("This room is locked");
+    }
+    if (room.passwordHash && !verifySecret(password, room.passwordHash)) {
+      throw new Error("Incorrect room password");
+    }
+    if (room.viewers.size + room.pendingViewers.size >= room.viewerLimit) {
+      throw new Error("This room is full");
+    }
     const requestId = this.createParticipantId();
     const normalizedName = this.normalizeDisplayName(displayName);
     room.pendingViewers.set(requestId, { requestId, socketId, displayName: normalizedName });
-    room.updatedAt = now;
+    room.updatedAt = joinedAt;
     this.socketMemberships.set(socketId, {
       roomId,
       role: "pending_viewer",
@@ -143,6 +193,9 @@ export class RoomStore {
     const pendingViewer = room.pendingViewers.get(requestId);
     if (!pendingViewer) {
       throw new Error("Join request not found");
+    }
+    if (room.viewers.size >= room.viewerLimit) {
+      throw new Error("This room is full");
     }
 
     const viewerId = this.createParticipantId();
@@ -191,6 +244,43 @@ export class RoomStore {
     room.updatedAt = now;
     this.queueSave(room);
     return room;
+  }
+
+  setSecurity(
+    roomId: string,
+    settings: { locked?: boolean; viewerLimit?: number; passwordHash?: string | null; persistent?: boolean },
+    now = Date.now()
+  ): Room {
+    const room = this.requireRoom(roomId);
+    if (settings.locked !== undefined) {
+      room.locked = settings.locked;
+    }
+    if (settings.viewerLimit !== undefined) {
+      room.viewerLimit = this.normalizeViewerLimit(settings.viewerLimit);
+    }
+    if (settings.passwordHash !== undefined) {
+      room.passwordHash = settings.passwordHash;
+    }
+    if (settings.persistent !== undefined) {
+      room.persistent = settings.persistent;
+    }
+    room.updatedAt = now;
+    this.queueSave(room);
+    return room;
+  }
+
+  kickViewer(roomId: string, viewerId: string, now = Date.now()): ViewerRecord {
+    const room = this.requireRoom(roomId);
+    const viewer = room.viewers.get(viewerId);
+    if (!viewer) {
+      throw new Error("Viewer not found");
+    }
+
+    room.viewers.delete(viewerId);
+    this.socketMemberships.delete(viewer.socketId);
+    room.updatedAt = now;
+    this.queueSave(room);
+    return viewer;
   }
 
   markSharing(roomId: string, isSharing: boolean, now = Date.now()): Room {
@@ -280,7 +370,7 @@ export class RoomStore {
     return removed;
   }
 
-  getState(roomId: string, selfId?: string): RoomStatePayload {
+  getState(roomId: string, selfId?: string, includeViewers = false): RoomStatePayload {
     const room = this.requireRoom(roomId);
     let state: RoomStatePayload["state"] = ROOM_STATES.WAITING_FOR_HOST;
 
@@ -297,7 +387,17 @@ export class RoomStore {
       state,
       accessMode: room.accessMode,
       viewerDrawingEnabled: room.viewerDrawingEnabled,
+      locked: room.locked,
+      hasPassword: Boolean(room.passwordHash),
+      viewerLimit: room.viewerLimit,
+      persistent: room.persistent,
       viewerCount: room.viewers.size,
+      viewers: includeViewers
+        ? Array.from(room.viewers.entries(), ([viewerId, viewer]) => ({
+            viewerId,
+            displayName: viewer.displayName
+          }))
+        : [],
       isHostPresent: Boolean(room.hostSocketId),
       isSharing: room.isSharing,
       ...(selfId ? { selfId } : {})
@@ -330,6 +430,11 @@ export class RoomStore {
       id: room.id,
       accessMode: room.accessMode,
       viewerDrawingEnabled: room.viewerDrawingEnabled,
+      passwordHash: room.passwordHash,
+      hostTokenHash: room.hostTokenHash,
+      locked: room.locked,
+      viewerLimit: room.viewerLimit,
+      persistent: room.persistent,
       wasSharing: room.wasSharing,
       createdAt: room.createdAt,
       updatedAt: room.updatedAt
@@ -350,5 +455,12 @@ export class RoomStore {
     this.persistenceQueue = this.persistenceQueue.then(operation).catch((error: unknown) => {
       console.error("Room persistence operation failed", error);
     });
+  }
+
+  private normalizeViewerLimit(viewerLimit: number | undefined): number {
+    if (!Number.isInteger(viewerLimit)) {
+      return DEFAULT_VIEWER_LIMIT;
+    }
+    return Math.min(MAX_VIEWER_LIMIT, Math.max(1, viewerLimit!));
   }
 }
