@@ -1,4 +1,4 @@
-import { CheckCheck, LogOut, ShieldCheck, Users, X } from "lucide-react";
+import { CheckCheck, LogOut, Pencil, ShieldCheck, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -146,6 +146,10 @@ export function RoomPage() {
     }
   }
 
+  function handleViewerDrawing(enabled: boolean) {
+    socket.emit(SOCKET_EVENTS.ANNOTATION_VIEWER_DRAWING, { roomId, enabled });
+  }
+
   if (!isValidRoomId(roomId)) {
     return <RoomShell message="This room link is invalid." />;
   }
@@ -213,7 +217,15 @@ export function RoomPage() {
 
         <section className="grid gap-5 lg:grid-cols-[1fr_320px]">
           <div className="flex flex-col gap-4">
-            <ScreenVideo stream={visibleStream} label={videoLabel} />
+            <ScreenVideo
+              stream={visibleStream}
+              label={videoLabel}
+              socket={socket}
+              roomId={roomId}
+              isSharing={roomState.isSharing}
+              canDraw={role === "host" || roomState.viewerDrawingEnabled}
+              isHost={role === "host"}
+            />
             <RoomStatus state={roomState.state} role={role} />
             {webRTCState === "failed" ? (
               <div className="rounded-md border-2 border-ink bg-coral px-4 py-3 text-sm font-bold text-ink shadow-soft">
@@ -289,6 +301,22 @@ export function RoomPage() {
                     {roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "Open room" : "Host approval required"}
                   </div>
                 )}
+                {role === "host" ? (
+                  <div className="rounded-md border-2 border-ink bg-cream p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Annotations</p>
+                    <button
+                      type="button"
+                      aria-pressed={roomState.viewerDrawingEnabled}
+                      onClick={() => handleViewerDrawing(!roomState.viewerDrawingEnabled)}
+                      className={`mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md border-2 border-ink px-3 text-xs font-extrabold ${
+                        roomState.viewerDrawingEnabled ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-white"
+                      }`}
+                    >
+                      <Pencil aria-hidden className="h-4 w-4" />
+                      {roomState.viewerDrawingEnabled ? "Viewer drawing enabled" : "Viewer drawing disabled"}
+                    </button>
+                  </div>
+                ) : null}
                 {role === "host" && pendingRequests.length > 0 ? (
                   <div className="rounded-md border-2 border-ink bg-cream p-3">
                     <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Join requests</p>

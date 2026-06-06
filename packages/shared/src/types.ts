@@ -1,8 +1,31 @@
-import type { ROOM_ACCESS_MODES, ROOM_STATES } from "./constants.js";
+import type { ANNOTATION_COLORS, ROOM_ACCESS_MODES, ROOM_STATES } from "./constants.js";
 
 export type RoomRole = "host" | "viewer";
 export type RoomState = (typeof ROOM_STATES)[keyof typeof ROOM_STATES];
 export type RoomAccessMode = (typeof ROOM_ACCESS_MODES)[keyof typeof ROOM_ACCESS_MODES];
+export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
+
+export type AnnotationPoint = {
+  x: number;
+  y: number;
+};
+
+export type AnnotationStrokePayload = {
+  roomId: string;
+  strokeId: string;
+  color: AnnotationColor;
+  points: AnnotationPoint[];
+  complete: boolean;
+};
+
+export type AnnotationClearPayload = {
+  roomId: string;
+};
+
+export type AnnotationViewerDrawingPayload = {
+  roomId: string;
+  enabled: boolean;
+};
 
 export type RoomJoinPayload = {
   roomId: string;
@@ -20,6 +43,7 @@ export type RoomStatePayload = {
   roomId: string;
   state: RoomState;
   accessMode: RoomAccessMode;
+  viewerDrawingEnabled: boolean;
   viewerCount: number;
   isHostPresent: boolean;
   isSharing: boolean;

@@ -1,8 +1,13 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
 import {
+  ANNOTATION_COLORS,
+  ANNOTATION_MAX_POINTS_PER_SEGMENT,
   ROOM_ACCESS_MODES,
   SOCKET_EVENTS,
+  type AnnotationClearPayload,
+  type AnnotationStrokePayload,
+  type AnnotationViewerDrawingPayload,
   type ClientAnswerPayload,
   type ClientIceCandidatePayload,
   type ClientOfferPayload,
@@ -70,6 +75,40 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
         denyViewer(roomId, requestId, "The host declined your request.");
       }
     }
+  }
+
+  function canAnnotate(socketId: string, roomId: string): boolean {
+    const membership = roomStore.getMembership(socketId);
+    const room = roomStore.getRoom(roomId);
+    if (!membership || !room || membership.roomId !== roomId || !room.isSharing) {
+      return false;
+    }
+
+    return membership.role === "host" || (membership.role === "viewer" && room.viewerDrawingEnabled);
+  }
+
+  function isValidStroke(payload: AnnotationStrokePayload | undefined): payload is AnnotationStrokePayload {
+    return (
+      Boolean(payload) &&
+      typeof payload?.roomId === "string" &&
+      typeof payload.strokeId === "string" &&
+      payload.strokeId.length >= 1 &&
+      payload.strokeId.length <= 80 &&
+      ANNOTATION_COLORS.includes(payload.color) &&
+      typeof payload.complete === "boolean" &&
+      Array.isArray(payload.points) &&
+      payload.points.length >= 1 &&
+      payload.points.length <= ANNOTATION_MAX_POINTS_PER_SEGMENT &&
+      payload.points.every(
+        (point) =>
+          Number.isFinite(point.x) &&
+          Number.isFinite(point.y) &&
+          point.x >= 0 &&
+          point.x <= 1 &&
+          point.y >= 0 &&
+          point.y <= 1
+      )
+    );
   }
 
   io.on("connection", (socket) => {
@@ -155,6 +194,33 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       if (accessMode === ROOM_ACCESS_MODES.OPEN) {
         processAllPending(payload.roomId, "approve", socket.id);
       }
+      emitRoomState(payload.roomId);
+    });
+
+    socket.on(SOCKET_EVENTS.ANNOTATION_STROKE, (payload: AnnotationStrokePayload | undefined) => {
+      if (!isValidStroke(payload) || !canAnnotate(socket.id, payload.roomId)) {
+        return;
+      }
+
+      socket.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.ANNOTATION_STROKE, payload);
+    });
+
+    socket.on(SOCKET_EVENTS.ANNOTATION_CLEAR, (payload: AnnotationClearPayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.ANNOTATION_CLEAR, payload);
+    });
+
+    socket.on(SOCKET_EVENTS.ANNOTATION_VIEWER_DRAWING, (payload: AnnotationViewerDrawingPayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      roomStore.setViewerDrawingEnabled(payload.roomId, Boolean(payload.enabled));
       emitRoomState(payload.roomId);
     });
 
@@ -271,6 +337,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
           roomId,
           state: "host_disconnected",
           accessMode: roomStore.getRoom(roomId)?.accessMode ?? ROOM_ACCESS_MODES.APPROVAL,
+          viewerDrawingEnabled: roomStore.getRoom(roomId)?.viewerDrawingEnabled ?? true,
           viewerCount: roomStore.getRoom(roomId)?.viewers.size ?? 0,
           isHostPresent: false,
           isSharing: false

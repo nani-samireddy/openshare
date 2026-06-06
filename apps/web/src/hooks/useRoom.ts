@@ -33,6 +33,7 @@ export function useRoom({ socket, roomId, role, displayName, shouldJoin }: UseRo
       roomId,
       state: ROOM_STATES.WAITING_FOR_HOST,
       accessMode: ROOM_ACCESS_MODES.APPROVAL,
+      viewerDrawingEnabled: true,
       viewerCount: 0,
       isHostPresent: false,
       isSharing: false

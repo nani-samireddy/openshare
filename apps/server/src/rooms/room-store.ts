@@ -7,6 +7,7 @@ import {
   type RoomStatePayload,
   isValidRoomId
 } from "@openshare/shared";
+import type { PersistedRoom, RoomPersistence } from "./room-persistence.js";
 
 export type ViewerRecord = {
   socketId: string;
@@ -23,6 +24,7 @@ export type Room = {
   viewers: Map<string, ViewerRecord>;
   pendingViewers: Map<string, PendingViewerRecord>;
   accessMode: RoomAccessMode;
+  viewerDrawingEnabled: boolean;
   isSharing: boolean;
   wasSharing: boolean;
   createdAt: number;
@@ -39,6 +41,38 @@ export type SocketRoomMembership = {
 export class RoomStore {
   private readonly rooms = new Map<string, Room>();
   private readonly socketMemberships = new Map<string, SocketRoomMembership>();
+  private persistenceQueue = Promise.resolve();
+
+  constructor(
+    private readonly persistence?: RoomPersistence,
+    private readonly ttlMs = 30 * 60 * 1000
+  ) {}
+
+  async initialize(now = Date.now()): Promise<void> {
+    if (!this.persistence) {
+      return;
+    }
+
+    const persistedRooms = await this.persistence.loadRooms();
+    for (const persistedRoom of persistedRooms) {
+      if (!isValidRoomId(persistedRoom.id) || now - persistedRoom.updatedAt >= this.ttlMs) {
+        this.queueDelete(persistedRoom.id);
+        continue;
+      }
+
+      this.rooms.set(persistedRoom.id, {
+        ...persistedRoom,
+        hostSocketId: null,
+        viewers: new Map(),
+        pendingViewers: new Map(),
+        isSharing: false
+      });
+    }
+  }
+
+  async flushPersistence(): Promise<void> {
+    await this.persistenceQueue;
+  }
 
   createRoom(accessMode: RoomAccessMode = ROOM_ACCESS_MODES.APPROVAL, now = Date.now()): Room {
     let id = this.createRoomId();
@@ -52,12 +86,14 @@ export class RoomStore {
       viewers: new Map(),
       pendingViewers: new Map(),
       accessMode,
+      viewerDrawingEnabled: true,
       isSharing: false,
       wasSharing: false,
       createdAt: now,
       updatedAt: now
     };
     this.rooms.set(id, room);
+    this.queueSave(room);
     return room;
   }
 
@@ -82,6 +118,7 @@ export class RoomStore {
     room.hostSocketId = socketId;
     room.updatedAt = now;
     this.socketMemberships.set(socketId, { roomId, role: "host" });
+    this.queueSave(room);
     return room;
   }
 
@@ -97,6 +134,7 @@ export class RoomStore {
       participantId: requestId,
       displayName: normalizedName
     });
+    this.queueSave(room);
     return { room, requestId };
   }
 
@@ -121,6 +159,7 @@ export class RoomStore {
       participantId: viewerId,
       displayName: viewer.displayName
     });
+    this.queueSave(room);
     return { room, viewerId, viewer };
   }
 
@@ -134,6 +173,7 @@ export class RoomStore {
     room.pendingViewers.delete(requestId);
     room.updatedAt = now;
     this.socketMemberships.delete(pendingViewer.socketId);
+    this.queueSave(room);
     return pendingViewer;
   }
 
@@ -141,6 +181,15 @@ export class RoomStore {
     const room = this.requireRoom(roomId);
     room.accessMode = accessMode;
     room.updatedAt = now;
+    this.queueSave(room);
+    return room;
+  }
+
+  setViewerDrawingEnabled(roomId: string, enabled: boolean, now = Date.now()): Room {
+    const room = this.requireRoom(roomId);
+    room.viewerDrawingEnabled = enabled;
+    room.updatedAt = now;
+    this.queueSave(room);
     return room;
   }
 
@@ -149,6 +198,7 @@ export class RoomStore {
     room.isSharing = isSharing;
     room.wasSharing = room.wasSharing || isSharing;
     room.updatedAt = now;
+    this.queueSave(room);
     return room;
   }
 
@@ -190,6 +240,7 @@ export class RoomStore {
       }
 
       room.updatedAt = now;
+      this.queueSave(room);
     }
 
     this.socketMemberships.delete(socketId);
@@ -215,6 +266,7 @@ export class RoomStore {
     }
 
     this.rooms.delete(roomId);
+    this.queueDelete(roomId);
   }
 
   cleanupInactiveRooms(ttlMs: number, now = Date.now()): string[] {
@@ -244,6 +296,7 @@ export class RoomStore {
       roomId,
       state,
       accessMode: room.accessMode,
+      viewerDrawingEnabled: room.viewerDrawingEnabled,
       viewerCount: room.viewers.size,
       isHostPresent: Boolean(room.hostSocketId),
       isSharing: room.isSharing,
@@ -266,5 +319,36 @@ export class RoomStore {
     }
 
     return trimmed.slice(0, 40);
+  }
+
+  private queueSave(room: Room): void {
+    if (!this.persistence) {
+      return;
+    }
+
+    const persistedRoom: PersistedRoom = {
+      id: room.id,
+      accessMode: room.accessMode,
+      viewerDrawingEnabled: room.viewerDrawingEnabled,
+      wasSharing: room.wasSharing,
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt
+    };
+    const ttlSeconds = Math.max(1, Math.ceil(this.ttlMs / 1000));
+    this.queuePersistence(() => this.persistence!.saveRoom(persistedRoom, ttlSeconds));
+  }
+
+  private queueDelete(roomId: string): void {
+    if (!this.persistence) {
+      return;
+    }
+
+    this.queuePersistence(() => this.persistence!.deleteRoom(roomId));
+  }
+
+  private queuePersistence(operation: () => Promise<void>): void {
+    this.persistenceQueue = this.persistenceQueue.then(operation).catch((error: unknown) => {
+      console.error("Room persistence operation failed", error);
+    });
   }
 }

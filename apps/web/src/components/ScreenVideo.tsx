@@ -1,12 +1,19 @@
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { Socket } from "socket.io-client";
+import { AnnotationCanvas } from "./AnnotationCanvas";
 
 type ScreenVideoProps = {
   stream: MediaStream | null;
   label: string;
+  socket: Socket;
+  roomId: string;
+  isSharing: boolean;
+  canDraw: boolean;
+  isHost: boolean;
 };
 
-export function ScreenVideo({ stream, label }: ScreenVideoProps) {
+export function ScreenVideo({ stream, label, socket, roomId, isSharing, canDraw, isHost }: ScreenVideoProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -59,6 +66,15 @@ export function ScreenVideo({ stream, label }: ScreenVideoProps) {
           <div className="max-w-md rounded-md border-2 border-cream/40 px-4 py-3">{label}</div>
         </div>
       )}
+      <AnnotationCanvas
+        socket={socket}
+        roomId={roomId}
+        containerRef={containerRef}
+        videoRef={videoRef}
+        isSharing={isSharing}
+        canDraw={canDraw}
+        isHost={isHost}
+      />
       {canUseFullscreen ? (
         <button
           type="button"

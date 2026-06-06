@@ -9,6 +9,7 @@ import {
   isValidRoomId
 } from "@openshare/shared";
 import { RoomStore } from "./rooms/room-store.js";
+import { UpstashRoomPersistence } from "./rooms/upstash-room-persistence.js";
 import { createSocketServer } from "./signaling/socket-server.js";
 import type { ServerEnv } from "./env.js";
 
@@ -20,7 +21,13 @@ export type OpenShareServer = {
 
 export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
   const app = Fastify({ logger: true });
-  const roomStore = new RoomStore();
+  const roomTtlMs = env.roomTtlMinutes * 60 * 1000;
+  const roomPersistence =
+    env.upstashRedisRestUrl && env.upstashRedisRestToken
+      ? new UpstashRoomPersistence(env.upstashRedisRestUrl, env.upstashRedisRestToken)
+      : undefined;
+  const roomStore = new RoomStore(roomPersistence, roomTtlMs);
+  await roomStore.initialize();
 
   await app.register(cors, {
     origin: env.clientOrigins
@@ -35,6 +42,7 @@ export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
   app.post<{ Body: CreateRoomRequest; Reply: CreateRoomResponse }>("/rooms", async (request) => {
     const accessMode = request.body?.accessMode === ROOM_ACCESS_MODES.OPEN ? ROOM_ACCESS_MODES.OPEN : ROOM_ACCESS_MODES.APPROVAL;
     const room = roomStore.createRoom(accessMode);
+    await roomStore.flushPersistence();
     return { roomId: room.id, accessMode: room.accessMode };
   });
 
@@ -53,7 +61,7 @@ export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
   });
 
   const cleanupInterval = setInterval(() => {
-    roomStore.cleanupInactiveRooms(env.roomTtlMinutes * 60 * 1000);
+    roomStore.cleanupInactiveRooms(roomTtlMs);
   }, 60 * 1000);
   cleanupInterval.unref();
 
@@ -63,6 +71,7 @@ export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
     stop: async () => {
       clearInterval(cleanupInterval);
       await io.close();
+      await roomStore.flushPersistence();
       await app.close();
     }
   };

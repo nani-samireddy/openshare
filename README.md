@@ -6,12 +6,14 @@ The backend only manages rooms and relays WebRTC signaling. Screen media flows d
 
 Rooms can require host approval or run in open mode. Open rooms still require viewer display names but admit viewers automatically. Hosts can change the access mode live and approve or deny all pending requests at once.
 
+Hosts and approved viewers can draw temporary annotations over the shared screen. The host can disable viewer drawing or clear all annotations, and completed strokes fade after five seconds.
+
 ## Stack
 
 - React, Vite, TypeScript, TailwindCSS
 - Fastify, Socket.IO, TypeScript
 - pnpm workspaces
-- In-memory room store for the MVP
+- Upstash Redis room persistence with an in-memory fallback for local development
 
 ## Local Development
 
@@ -49,6 +51,8 @@ Copy `.env.example` into the environment used by each app and adjust values as n
 PORT=4000
 CLIENT_ORIGIN=http://localhost:5173
 ROOM_TTL_MINUTES=30
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 VITE_SIGNALING_URL=http://localhost:4000
 TURN_URL=
 TURN_USERNAME=
@@ -58,6 +62,10 @@ TURN_PASSWORD=
 `CLIENT_ORIGIN` must match the deployed web origin for CORS and Socket.IO. Use a comma-separated list when you need both production and preview origins. `VITE_SIGNALING_URL` must point the web app at the deployed server.
 
 TURN settings are optional. When `TURN_URL` is set, the server exposes it through `GET /config` and clients use it in `RTCPeerConnection` alongside the default STUN server.
+
+Upstash Redis is optional locally and recommended in production. Create an Upstash Redis database, copy the REST URL and standard REST token, and set both `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` on the server. Never expose the standard token through the frontend or a `VITE_` environment variable.
+
+Redis stores room existence, access mode, annotation permission, and inactivity timestamps. Live Socket.IO memberships remain process-local because browser socket IDs do not survive restarts. After a server restart, saved rooms remain available, but hosts and viewers reconnect as new participants.
 
 ## Scripts
 
@@ -75,12 +83,14 @@ For a free MVP deployment, host `apps/web` on Cloudflare Pages, Vercel, or Netli
 
 Production screen capture requires HTTPS. Configure `CLIENT_ORIGIN` on the server to the exact frontend URL, and configure `VITE_SIGNALING_URL` on the frontend to the backend URL.
 
-The MVP uses direct P2P WebRTC with a public Google STUN server. This is simple and cheap, but it will not connect reliably across every network. Add a TURN server such as coturn for better reliability, Redis for multi-instance room state, and an SFU such as LiveKit or mediasoup before supporting larger rooms.
+On Render, add `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to the server service environment, then redeploy. The server automatically uses Redis when both are present and falls back to memory when neither is set.
+
+The MVP uses direct P2P WebRTC with a public Google STUN server. This is simple and cheap, but it will not connect reliably across every network. Add a TURN server such as coturn for better reliability, a Socket.IO Redis adapter for multi-instance event delivery, and an SFU such as LiveKit or mediasoup before supporting larger rooms.
 
 ## MVP Limitations
 
 - No authentication
-- No database
+- No long-term room history or user accounts
 - No recording
 - No chat
 - No remote control
@@ -95,5 +105,6 @@ The MVP uses direct P2P WebRTC with a public Google STUN server. This is simple 
 3. Open the link in another browser or device.
 4. Start sharing from the host browser.
 5. Confirm the viewer sees the host screen.
-6. Stop sharing and confirm viewers see the stopped state.
-7.
+6. Draw from both browsers and confirm annotations appear on the other screen.
+7. Disable viewer drawing and confirm only the host can annotate.
+8. Stop sharing and confirm viewers see the stopped state.

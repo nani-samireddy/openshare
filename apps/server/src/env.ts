@@ -6,6 +6,8 @@ export type ServerEnv = {
   clientOrigins: string[];
   iceServers: RTCIceServer[];
   roomTtlMinutes: number;
+  upstashRedisRestUrl?: string;
+  upstashRedisRestToken?: string;
 };
 
 function normalizeOrigin(value: string): string {
@@ -54,10 +56,18 @@ function parseIceServers(): RTCIceServer[] {
 }
 
 export function loadEnv(): ServerEnv {
+  const upstashRedisRestUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const upstashRedisRestToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  if (Boolean(upstashRedisRestUrl) !== Boolean(upstashRedisRestToken)) {
+    throw new Error("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be configured together");
+  }
+
   return {
     port: parsePort(process.env.PORT),
     clientOrigins: parseClientOrigins(process.env.CLIENT_ORIGIN),
     iceServers: parseIceServers(),
-    roomTtlMinutes: parsePositiveNumber(process.env.ROOM_TTL_MINUTES, DEFAULT_ROOM_TTL_MINUTES)
+    roomTtlMinutes: parsePositiveNumber(process.env.ROOM_TTL_MINUTES, DEFAULT_ROOM_TTL_MINUTES),
+    upstashRedisRestUrl: upstashRedisRestUrl || undefined,
+    upstashRedisRestToken: upstashRedisRestToken || undefined
   };
 }

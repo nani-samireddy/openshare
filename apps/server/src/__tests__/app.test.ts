@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { io as createClient, type Socket } from "socket.io-client";
 import {
+  ANNOTATION_COLORS,
   ROOM_ACCESS_MODES,
   SOCKET_EVENTS,
+  type AnnotationStrokePayload,
   type RoomJoinAck,
   type RoomStatePayload,
   type ViewerDeniedPayload,
@@ -214,6 +216,102 @@ describe("signaling", () => {
       viewer.close();
     }
   });
+
+  it("relays annotations from hosts and approved viewers while sharing", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const host = createClient(getServerUrl(server), { transports: ["websocket"] });
+    const viewer = createClient(getServerUrl(server), { transports: ["websocket"] });
+    const hostStroke = annotationStroke(room.id, "host-stroke");
+    const viewerStroke = annotationStroke(room.id, "viewer-stroke");
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+      const sharingState = waitForEventWhere<RoomStatePayload>(
+        viewer,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.isSharing
+      );
+      host.emit(SOCKET_EVENTS.HOST_STARTED_SHARING, { roomId: room.id });
+      await sharingState;
+
+      const receivedByViewer = waitForEventWhere<AnnotationStrokePayload>(
+        viewer,
+        SOCKET_EVENTS.ANNOTATION_STROKE,
+        (stroke) => stroke.strokeId === hostStroke.strokeId
+      );
+      host.emit(SOCKET_EVENTS.ANNOTATION_STROKE, hostStroke);
+      expect(await receivedByViewer).toEqual(hostStroke);
+
+      const receivedByHost = waitForEventWhere<AnnotationStrokePayload>(
+        host,
+        SOCKET_EVENTS.ANNOTATION_STROKE,
+        (stroke) => stroke.strokeId === viewerStroke.strokeId
+      );
+      viewer.emit(SOCKET_EVENTS.ANNOTATION_STROKE, viewerStroke);
+      expect(await receivedByHost).toEqual(viewerStroke);
+    } finally {
+      host.close();
+      viewer.close();
+    }
+  });
+
+  it("enforces annotation permissions and host-only controls", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const url = getServerUrl(server);
+    const host = createClient(url, { transports: ["websocket"] });
+    const viewer = createClient(url, { transports: ["websocket"] });
+    const outsider = createClient(url, { transports: ["websocket"] });
+    let strokesReceivedByHost = 0;
+    let clearsReceivedByHost = 0;
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer), waitForConnect(outsider)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+      const sharingState = waitForEventWhere<RoomStatePayload>(
+        viewer,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.isSharing
+      );
+      host.emit(SOCKET_EVENTS.HOST_STARTED_SHARING, { roomId: room.id });
+      await sharingState;
+
+      host.on(SOCKET_EVENTS.ANNOTATION_STROKE, () => {
+        strokesReceivedByHost += 1;
+      });
+      host.on(SOCKET_EVENTS.ANNOTATION_CLEAR, () => {
+        clearsReceivedByHost += 1;
+      });
+
+      const disabledState = waitForEventWhere<RoomStatePayload>(
+        viewer,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && !state.viewerDrawingEnabled
+      );
+      host.emit(SOCKET_EVENTS.ANNOTATION_VIEWER_DRAWING, { roomId: room.id, enabled: false });
+      await disabledState;
+
+      viewer.emit(SOCKET_EVENTS.ANNOTATION_STROKE, annotationStroke(room.id, "blocked-viewer"));
+      outsider.emit(SOCKET_EVENTS.ANNOTATION_STROKE, annotationStroke(room.id, "blocked-outsider"));
+      viewer.emit(SOCKET_EVENTS.ANNOTATION_CLEAR, { roomId: room.id });
+      viewer.emit(SOCKET_EVENTS.ANNOTATION_VIEWER_DRAWING, { roomId: room.id, enabled: true });
+      await delay(40);
+
+      expect(strokesReceivedByHost).toBe(0);
+      expect(clearsReceivedByHost).toBe(0);
+      expect(server.roomStore.getState(room.id).viewerDrawingEnabled).toBe(false);
+    } finally {
+      host.close();
+      viewer.close();
+      outsider.close();
+    }
+  });
 });
 
 function waitForConnect(socket: Socket): Promise<void> {
@@ -245,4 +343,18 @@ function waitForEventWhere<T>(socket: Socket, event: string, predicate: (payload
       }
     });
   });
+}
+
+function annotationStroke(roomId: string, strokeId: string): AnnotationStrokePayload {
+  return {
+    roomId,
+    strokeId,
+    color: ANNOTATION_COLORS[0],
+    points: [{ x: 0.25, y: 0.75 }],
+    complete: true
+  };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

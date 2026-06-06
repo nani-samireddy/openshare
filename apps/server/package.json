@@ -15,6 +15,7 @@
   "dependencies": {
     "@fastify/cors": "^11.1.0",
     "@openshare/shared": "workspace:*",
+    "@upstash/redis": "^1.38.0",
     "dotenv": "^17.2.3",
     "fastify": "^5.6.2",
     "socket.io": "^4.8.1"
