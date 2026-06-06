@@ -10,12 +10,19 @@ export const ROOM_STATES = {
   HOST_DISCONNECTED: "host_disconnected"
 } as const;
 
+export const ROOM_ACCESS_MODES = {
+  APPROVAL: "approval",
+  OPEN: "open"
+} as const;
+
 export const SOCKET_EVENTS = {
   ROOM_JOIN: "room:join",
   ROOM_LEAVE: "room:leave",
   ROOM_STATE: "room:state",
+  ROOM_ACCESS_MODE: "room:access-mode",
   VIEWER_REQUESTED: "viewer:requested",
   VIEWER_APPROVAL: "viewer:approval",
+  VIEWER_APPROVAL_BULK: "viewer:approval-bulk",
   VIEWER_APPROVED: "viewer:approved",
   VIEWER_DENIED: "viewer:denied",
   HOST_STARTED_SHARING: "host:started-sharing",

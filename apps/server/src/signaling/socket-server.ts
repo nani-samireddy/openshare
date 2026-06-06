@@ -1,12 +1,15 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
 import {
+  ROOM_ACCESS_MODES,
   SOCKET_EVENTS,
   type ClientAnswerPayload,
   type ClientIceCandidatePayload,
   type ClientOfferPayload,
+  type RoomAccessModePayload,
   type RoomJoinAck,
-  type RoomJoinPayload
+  type RoomJoinPayload,
+  type ViewerApprovalBulkPayload
 } from "@openshare/shared";
 import type { RoomStore } from "../rooms/room-store.js";
 
@@ -32,6 +35,43 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId));
   }
 
+  function admitViewer(roomId: string, requestId: string, hostSocketId?: string): void {
+    const { room, viewerId, viewer } = roomStore.approveViewer(roomId, requestId);
+    socketFor(io, viewer.socketId)?.join(roomChannel(room.id));
+    io.to(viewer.socketId).emit(SOCKET_EVENTS.VIEWER_APPROVED, { roomId: room.id, viewerId });
+    io.to(viewer.socketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, viewerId));
+    emitRoomState(room.id);
+
+    const hostTarget = hostSocketId ?? roomStore.getHostSocketId(room.id);
+    if (hostTarget) {
+      io.to(hostTarget).emit(SOCKET_EVENTS.VIEWER_JOINED, {
+        roomId: room.id,
+        viewerId,
+        displayName: viewer.displayName
+      });
+    }
+  }
+
+  function denyViewer(roomId: string, requestId: string, reason: string): void {
+    const deniedViewer = roomStore.denyViewer(roomId, requestId);
+    io.to(deniedViewer.socketId).emit(SOCKET_EVENTS.VIEWER_DENIED, {
+      roomId,
+      reason
+    });
+  }
+
+  function processAllPending(roomId: string, action: "approve" | "deny", hostSocketId?: string): void {
+    const room = roomStore.requireRoom(roomId);
+    const requestIds = Array.from(room.pendingViewers.keys());
+    for (const requestId of requestIds) {
+      if (action === "approve") {
+        admitViewer(roomId, requestId, hostSocketId);
+      } else {
+        denyViewer(roomId, requestId, "The host declined your request.");
+      }
+    }
+  }
+
   io.on("connection", (socket) => {
     socket.on(SOCKET_EVENTS.ROOM_JOIN, (payload: RoomJoinPayload, ack?: (result: RoomJoinAck) => void) => {
       try {
@@ -52,6 +92,12 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
         }
 
         const { room, requestId } = roomStore.requestViewerJoin(payload.roomId, socket.id, payload.displayName ?? "");
+        if (room.accessMode === ROOM_ACCESS_MODES.OPEN) {
+          admitViewer(room.id, requestId);
+          ack?.({ ok: true, status: "joined" });
+          return;
+        }
+
         socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id));
         const hostSocketId = roomStore.getHostSocketId(room.id);
         if (hostSocketId) {
@@ -76,31 +122,40 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
 
       try {
         if (!payload.approved) {
-          const deniedViewer = roomStore.denyViewer(payload.roomId, payload.requestId);
-          io.to(deniedViewer.socketId).emit(SOCKET_EVENTS.VIEWER_DENIED, {
-            roomId: payload.roomId,
-            reason: "The host declined your request."
-          });
+          denyViewer(payload.roomId, payload.requestId, "The host declined your request.");
           return;
         }
 
-        const { room, viewerId, viewer } = roomStore.approveViewer(payload.roomId, payload.requestId);
-        socketFor(io, viewer.socketId)?.join(roomChannel(room.id));
-        io.to(viewer.socketId).emit(SOCKET_EVENTS.VIEWER_APPROVED, { roomId: room.id, viewerId });
-        io.to(viewer.socketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, viewerId));
-        emitRoomState(room.id);
-
-        socket.emit(SOCKET_EVENTS.VIEWER_JOINED, {
-          roomId: room.id,
-          viewerId,
-          displayName: viewer.displayName
-        });
+        admitViewer(payload.roomId, payload.requestId, socket.id);
       } catch {
         socket.emit(SOCKET_EVENTS.VIEWER_DENIED, {
           roomId: payload.roomId,
           reason: "That join request is no longer available."
         });
       }
+    });
+
+    socket.on(SOCKET_EVENTS.VIEWER_APPROVAL_BULK, (payload: ViewerApprovalBulkPayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      processAllPending(payload.roomId, payload.action, socket.id);
+    });
+
+    socket.on(SOCKET_EVENTS.ROOM_ACCESS_MODE, (payload: RoomAccessModePayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      const accessMode = payload.accessMode === ROOM_ACCESS_MODES.OPEN ? ROOM_ACCESS_MODES.OPEN : ROOM_ACCESS_MODES.APPROVAL;
+      roomStore.setAccessMode(payload.roomId, accessMode);
+      if (accessMode === ROOM_ACCESS_MODES.OPEN) {
+        processAllPending(payload.roomId, "approve", socket.id);
+      }
+      emitRoomState(payload.roomId);
     });
 
     socket.on(SOCKET_EVENTS.ROOM_LEAVE, () => {
@@ -215,6 +270,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
         io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, {
           roomId,
           state: "host_disconnected",
+          accessMode: roomStore.getRoom(roomId)?.accessMode ?? ROOM_ACCESS_MODES.APPROVAL,
           viewerCount: roomStore.getRoom(roomId)?.viewers.size ?? 0,
           isHostPresent: false,
           isSharing: false

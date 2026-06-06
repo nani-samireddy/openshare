@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROOM_STATES } from "@openshare/shared";
+import { ROOM_ACCESS_MODES, ROOM_STATES } from "@openshare/shared";
 import { RoomStore } from "../rooms/room-store.js";
 
 describe("RoomStore", () => {
@@ -7,6 +7,16 @@ describe("RoomStore", () => {
     const store = new RoomStore();
     const room = store.createRoom();
     expect(room.id).toMatch(/^[A-Za-z0-9_-]{6}$/);
+    expect(room.accessMode).toBe(ROOM_ACCESS_MODES.APPROVAL);
+  });
+
+  it("creates open rooms and can change access mode", () => {
+    const store = new RoomStore();
+    const room = store.createRoom(ROOM_ACCESS_MODES.OPEN);
+    expect(room.accessMode).toBe(ROOM_ACCESS_MODES.OPEN);
+
+    store.setAccessMode(room.id, ROOM_ACCESS_MODES.APPROVAL);
+    expect(store.getState(room.id).accessMode).toBe(ROOM_ACCESS_MODES.APPROVAL);
   });
 
   it("tracks host and viewers without exposing socket ids as participant ids", () => {
@@ -44,7 +54,7 @@ describe("RoomStore", () => {
 
   it("cleans up disconnected sockets and inactive rooms", () => {
     const store = new RoomStore();
-    const room = store.createRoom(1000);
+    const room = store.createRoom(ROOM_ACCESS_MODES.APPROVAL, 1000);
     store.joinHost(room.id, "socket-host", 1000);
     const { requestId } = store.requestViewerJoin(room.id, "socket-viewer", "Nani", 1000);
     const { viewerId } = store.approveViewer(room.id, requestId, 1000);

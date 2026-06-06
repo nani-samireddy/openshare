@@ -1,7 +1,8 @@
-import type { ROOM_STATES } from "./constants.js";
+import type { ROOM_ACCESS_MODES, ROOM_STATES } from "./constants.js";
 
 export type RoomRole = "host" | "viewer";
 export type RoomState = (typeof ROOM_STATES)[keyof typeof ROOM_STATES];
+export type RoomAccessMode = (typeof ROOM_ACCESS_MODES)[keyof typeof ROOM_ACCESS_MODES];
 
 export type RoomJoinPayload = {
   roomId: string;
@@ -18,6 +19,7 @@ export type RoomJoinAck = {
 export type RoomStatePayload = {
   roomId: string;
   state: RoomState;
+  accessMode: RoomAccessMode;
   viewerCount: number;
   isHostPresent: boolean;
   isSharing: boolean;
@@ -46,6 +48,16 @@ export type ViewerApprovalPayload = {
   roomId: string;
   requestId: string;
   approved: boolean;
+};
+
+export type ViewerApprovalBulkPayload = {
+  roomId: string;
+  action: "approve" | "deny";
+};
+
+export type RoomAccessModePayload = {
+  roomId: string;
+  accessMode: RoomAccessMode;
 };
 
 export type ViewerApprovedPayload = {
@@ -89,6 +101,11 @@ export type ServerIceCandidatePayload = {
 
 export type CreateRoomResponse = {
   roomId: string;
+  accessMode: RoomAccessMode;
+};
+
+export type CreateRoomRequest = {
+  accessMode?: RoomAccessMode;
 };
 
 export type HealthResponse = {

@@ -1,6 +1,13 @@
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
-import { type CreateRoomResponse, type HealthResponse, type PublicConfigResponse, isValidRoomId } from "@openshare/shared";
+import {
+  ROOM_ACCESS_MODES,
+  type CreateRoomRequest,
+  type CreateRoomResponse,
+  type HealthResponse,
+  type PublicConfigResponse,
+  isValidRoomId
+} from "@openshare/shared";
 import { RoomStore } from "./rooms/room-store.js";
 import { createSocketServer } from "./signaling/socket-server.js";
 import type { ServerEnv } from "./env.js";
@@ -25,9 +32,10 @@ export async function buildServer(env: ServerEnv): Promise<OpenShareServer> {
     iceServers: env.iceServers
   }));
 
-  app.post<{ Reply: CreateRoomResponse }>("/rooms", async () => {
-    const room = roomStore.createRoom();
-    return { roomId: room.id };
+  app.post<{ Body: CreateRoomRequest; Reply: CreateRoomResponse }>("/rooms", async (request) => {
+    const accessMode = request.body?.accessMode === ROOM_ACCESS_MODES.OPEN ? ROOM_ACCESS_MODES.OPEN : ROOM_ACCESS_MODES.APPROVAL;
+    const room = roomStore.createRoom(accessMode);
+    return { roomId: room.id, accessMode: room.accessMode };
   });
 
   app.get("/rooms/:roomId", async (request, reply) => {

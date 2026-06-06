@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
 import {
+  ROOM_ACCESS_MODES,
   ROOM_ID_LENGTH,
   ROOM_STATES,
+  type RoomAccessMode,
   type RoomStatePayload,
   isValidRoomId
 } from "@openshare/shared";
@@ -20,6 +22,7 @@ export type Room = {
   hostSocketId: string | null;
   viewers: Map<string, ViewerRecord>;
   pendingViewers: Map<string, PendingViewerRecord>;
+  accessMode: RoomAccessMode;
   isSharing: boolean;
   wasSharing: boolean;
   createdAt: number;
@@ -37,7 +40,7 @@ export class RoomStore {
   private readonly rooms = new Map<string, Room>();
   private readonly socketMemberships = new Map<string, SocketRoomMembership>();
 
-  createRoom(now = Date.now()): Room {
+  createRoom(accessMode: RoomAccessMode = ROOM_ACCESS_MODES.APPROVAL, now = Date.now()): Room {
     let id = this.createRoomId();
     while (this.rooms.has(id)) {
       id = this.createRoomId();
@@ -48,6 +51,7 @@ export class RoomStore {
       hostSocketId: null,
       viewers: new Map(),
       pendingViewers: new Map(),
+      accessMode,
       isSharing: false,
       wasSharing: false,
       createdAt: now,
@@ -131,6 +135,13 @@ export class RoomStore {
     room.updatedAt = now;
     this.socketMemberships.delete(pendingViewer.socketId);
     return pendingViewer;
+  }
+
+  setAccessMode(roomId: string, accessMode: RoomAccessMode, now = Date.now()): Room {
+    const room = this.requireRoom(roomId);
+    room.accessMode = accessMode;
+    room.updatedAt = now;
+    return room;
   }
 
   markSharing(roomId: string, isSharing: boolean, now = Date.now()): Room {
@@ -232,6 +243,7 @@ export class RoomStore {
     return {
       roomId,
       state,
+      accessMode: room.accessMode,
       viewerCount: room.viewers.size,
       isHostPresent: Boolean(room.hostSocketId),
       isSharing: room.isSharing,

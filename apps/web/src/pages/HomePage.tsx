@@ -1,6 +1,7 @@
-import { Github, MonitorUp } from "lucide-react";
+import { Github, LockKeyhole, MonitorUp, Users } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ROOM_ACCESS_MODES, type RoomAccessMode } from "@openshare/shared";
 import { Button } from "../components/Button";
 import { createRoom } from "../lib/api";
 import { SCREEN_SHARE_UNSUPPORTED_MESSAGE, supportsScreenSharing } from "../lib/screenShareSupport";
@@ -8,6 +9,7 @@ import { SCREEN_SHARE_UNSUPPORTED_MESSAGE, supportsScreenSharing } from "../lib/
 export function HomePage() {
   const navigate = useNavigate();
   const canHostFromBrowser = supportsScreenSharing();
+  const [accessMode, setAccessMode] = useState<RoomAccessMode>(ROOM_ACCESS_MODES.APPROVAL);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(canHostFromBrowser ? null : SCREEN_SHARE_UNSUPPORTED_MESSAGE);
 
@@ -21,7 +23,7 @@ export function HomePage() {
     setError(null);
 
     try {
-      const { roomId } = await createRoom();
+      const { roomId } = await createRoom({ accessMode });
       navigate(`/room/${roomId}?role=host`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create a room. Please try again.");
@@ -43,6 +45,34 @@ export function HomePage() {
           <p className="mt-5 max-w-xl text-lg font-bold leading-8 text-ink/80">
             Create a room, share the link, and let others view your screen without installing anything.
           </p>
+
+          <div className="mt-6 max-w-xl">
+            <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-ink/70">Who can join?</p>
+            <div className="grid grid-cols-2 gap-2 rounded-md border-2 border-ink bg-cream p-2 shadow-soft">
+              <button
+                type="button"
+                aria-pressed={accessMode === ROOM_ACCESS_MODES.APPROVAL}
+                onClick={() => setAccessMode(ROOM_ACCESS_MODES.APPROVAL)}
+                className={`flex min-h-12 items-center justify-center gap-2 rounded-md border-2 border-ink px-3 text-sm font-extrabold transition ${
+                  accessMode === ROOM_ACCESS_MODES.APPROVAL ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-white hover:bg-sun/30"
+                }`}
+              >
+                <LockKeyhole aria-hidden className="h-4 w-4 stroke-[3]" />
+                Approval required
+              </button>
+              <button
+                type="button"
+                aria-pressed={accessMode === ROOM_ACCESS_MODES.OPEN}
+                onClick={() => setAccessMode(ROOM_ACCESS_MODES.OPEN)}
+                className={`flex min-h-12 items-center justify-center gap-2 rounded-md border-2 border-ink px-3 text-sm font-extrabold transition ${
+                  accessMode === ROOM_ACCESS_MODES.OPEN ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-white hover:bg-sun/30"
+                }`}
+              >
+                <Users aria-hidden className="h-4 w-4 stroke-[3]" />
+                Open room
+              </button>
+            </div>
+          </div>
 
           <div className="mt-8 flex flex-wrap items-center gap-4">
             <Button

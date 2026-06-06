@@ -1,9 +1,13 @@
-import type { CreateRoomResponse, PublicConfigResponse } from "@openshare/shared";
+import type { CreateRoomRequest, CreateRoomResponse, PublicConfigResponse } from "@openshare/shared";
 import { getSignalingUrl } from "./config";
 
-export async function createRoom(): Promise<CreateRoomResponse> {
+export async function createRoom(request: CreateRoomRequest = {}): Promise<CreateRoomResponse> {
   const response = await fetch(`${getSignalingUrl()}/rooms`, {
-    method: "POST"
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(request)
   });
 
   if (!response.ok) {

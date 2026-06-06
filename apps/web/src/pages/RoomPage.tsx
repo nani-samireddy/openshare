@@ -1,7 +1,15 @@
-import { LogOut } from "lucide-react";
+import { CheckCheck, LogOut, ShieldCheck, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ROOM_STATES, SOCKET_EVENTS, isValidRoomId, type RoomRole, type ViewerRequestedPayload } from "@openshare/shared";
+import {
+  ROOM_ACCESS_MODES,
+  ROOM_STATES,
+  SOCKET_EVENTS,
+  isValidRoomId,
+  type RoomAccessMode,
+  type RoomRole,
+  type ViewerRequestedPayload
+} from "@openshare/shared";
 import { Button } from "../components/Button";
 import { ConnectionStateBadge } from "../components/ConnectionStateBadge";
 import { CopyLinkButton } from "../components/CopyLinkButton";
@@ -126,6 +134,18 @@ export function RoomPage() {
     setPendingRequests((current) => current.filter((request) => request.requestId !== requestId));
   }
 
+  function handleBulkApproval(action: "approve" | "deny") {
+    socket.emit(SOCKET_EVENTS.VIEWER_APPROVAL_BULK, { roomId, action });
+    setPendingRequests([]);
+  }
+
+  function handleAccessMode(accessMode: RoomAccessMode) {
+    socket.emit(SOCKET_EVENTS.ROOM_ACCESS_MODE, { roomId, accessMode });
+    if (accessMode === ROOM_ACCESS_MODES.OPEN) {
+      setPendingRequests([]);
+    }
+  }
+
   if (!isValidRoomId(roomId)) {
     return <RoomShell message="This room link is invalid." />;
   }
@@ -163,7 +183,7 @@ export function RoomPage() {
                   className="min-h-12 rounded-md border-2 border-ink bg-white px-4 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-sun/60"
                 />
                 <Button type="submit" disabled={!viewerNameInput.trim()}>
-                  Request to join
+                  Join room
                 </Button>
               </form>
             )}
@@ -231,9 +251,66 @@ export function RoomPage() {
                     onStop={handleStopSharing}
                   />
                 ) : null}
+                {role === "host" ? (
+                  <div className="rounded-md border-2 border-ink bg-cream p-3">
+                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Room access</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        aria-pressed={roomState.accessMode === ROOM_ACCESS_MODES.APPROVAL}
+                        onClick={() => handleAccessMode(ROOM_ACCESS_MODES.APPROVAL)}
+                        className={`flex min-h-11 items-center justify-center gap-2 rounded-md border-2 border-ink px-2 text-xs font-extrabold ${
+                          roomState.accessMode === ROOM_ACCESS_MODES.APPROVAL ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-white"
+                        }`}
+                      >
+                        <ShieldCheck aria-hidden className="h-4 w-4" />
+                        Approval
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={roomState.accessMode === ROOM_ACCESS_MODES.OPEN}
+                        onClick={() => handleAccessMode(ROOM_ACCESS_MODES.OPEN)}
+                        className={`flex min-h-11 items-center justify-center gap-2 rounded-md border-2 border-ink px-2 text-xs font-extrabold ${
+                          roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "bg-sun shadow-[3px_3px_0_#26304f]" : "bg-white"
+                        }`}
+                      >
+                        <Users aria-hidden className="h-4 w-4" />
+                        Open
+                      </button>
+                    </div>
+                    <p className="mt-3 text-xs font-bold text-ink/75">
+                      {roomState.accessMode === ROOM_ACCESS_MODES.OPEN
+                        ? "Named viewers join automatically."
+                        : "New viewers wait for host approval."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-md border-2 border-ink bg-cream px-3 py-2 text-xs font-extrabold text-ink">
+                    {roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "Open room" : "Host approval required"}
+                  </div>
+                )}
                 {role === "host" && pendingRequests.length > 0 ? (
                   <div className="rounded-md border-2 border-ink bg-cream p-3">
                     <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Join requests</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        className="min-h-10 px-2 text-xs"
+                        icon={<CheckCheck aria-hidden className="h-4 w-4" />}
+                        onClick={() => handleBulkApproval("approve")}
+                      >
+                        Approve all
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="danger"
+                        className="min-h-10 px-2 text-xs"
+                        icon={<X aria-hidden className="h-4 w-4" />}
+                        onClick={() => handleBulkApproval("deny")}
+                      >
+                        Deny all
+                      </Button>
+                    </div>
                     <div className="mt-3 flex flex-col gap-3">
                       {pendingRequests.map((request) => (
                         <div key={request.requestId} className="rounded-md border-2 border-ink bg-white p-3">

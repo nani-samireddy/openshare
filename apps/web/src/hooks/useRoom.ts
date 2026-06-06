@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ROOM_ACCESS_MODES,
   ROOM_STATES,
   SOCKET_EVENTS,
   type RoomJoinAck,
@@ -31,6 +32,7 @@ export function useRoom({ socket, roomId, role, displayName, shouldJoin }: UseRo
     () => ({
       roomId,
       state: ROOM_STATES.WAITING_FOR_HOST,
+      accessMode: ROOM_ACCESS_MODES.APPROVAL,
       viewerCount: 0,
       isHostPresent: false,
       isSharing: false

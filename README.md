@@ -4,6 +4,8 @@ OpenShare is a free, open-source browser screen-sharing MVP. A host creates a ro
 
 The backend only manages rooms and relays WebRTC signaling. Screen media flows directly between browsers through peer-to-peer WebRTC.
 
+Rooms can require host approval or run in open mode. Open rooms still require viewer display names but admit viewers automatically. Hosts can change the access mode live and approve or deny all pending requests at once.
+
 ## Stack
 
 - React, Vite, TypeScript, TailwindCSS
