@@ -10,6 +10,8 @@ Hosts and approved viewers can draw temporary annotations over the shared screen
 
 Rooms can also use passwords, live locking, viewer limits, reusable links, and host-controlled viewer removal. A private host token is saved in the creating browser and is never included in viewer invite links.
 
+Approved participants can use temporary room chat, quick reactions, and raise hand. Hosts can disable chat or reactions live and manage the raised-hand queue. Messages and reactions are relayed through Socket.IO and are not stored.
+
 ## Stack
 
 - React, Vite, TypeScript, TailwindCSS

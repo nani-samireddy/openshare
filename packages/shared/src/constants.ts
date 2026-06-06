@@ -22,6 +22,8 @@ export const DEFAULT_VIEWER_LIMIT = 20;
 export const MAX_VIEWER_LIMIT = 100;
 export const MIN_ROOM_PASSWORD_LENGTH = 4;
 export const MAX_ROOM_PASSWORD_LENGTH = 64;
+export const MAX_CHAT_MESSAGE_LENGTH = 500;
+export const REACTION_TYPES = ["clap", "heart", "thumbs_up", "celebrate"] as const;
 
 export const SOCKET_EVENTS = {
   ROOM_JOIN: "room:join",
@@ -29,6 +31,7 @@ export const SOCKET_EVENTS = {
   ROOM_STATE: "room:state",
   ROOM_ACCESS_MODE: "room:access-mode",
   ROOM_SECURITY: "room:security",
+  ROOM_INTERACTION_SETTINGS: "room:interaction-settings",
   VIEWER_REQUESTED: "viewer:requested",
   VIEWER_APPROVAL: "viewer:approval",
   VIEWER_APPROVAL_BULK: "viewer:approval-bulk",
@@ -36,6 +39,12 @@ export const SOCKET_EVENTS = {
   VIEWER_DENIED: "viewer:denied",
   VIEWER_KICK: "viewer:kick",
   VIEWER_KICKED: "viewer:kicked",
+  VIEWER_RAISE_HAND: "viewer:raise-hand",
+  VIEWER_LOWER_HAND: "viewer:lower-hand",
+  CHAT_SEND: "chat:send",
+  CHAT_MESSAGE: "chat:message",
+  REACTION_SEND: "reaction:send",
+  REACTION_RECEIVED: "reaction:received",
   ANNOTATION_STROKE: "annotation:stroke",
   ANNOTATION_CLEAR: "annotation:clear",
   ANNOTATION_VIEWER_DRAWING: "annotation:viewer-drawing",

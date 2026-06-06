@@ -5,6 +5,8 @@ import {
   ROOM_ACCESS_MODES,
   SOCKET_EVENTS,
   type AnnotationStrokePayload,
+  type ChatMessagePayload,
+  type ReactionReceivedPayload,
   type RoomJoinAck,
   type RoomStatePayload,
   type ViewerDeniedPayload,
@@ -374,6 +376,86 @@ describe("signaling", () => {
       expect(strokesReceivedByHost).toBe(0);
       expect(clearsReceivedByHost).toBe(0);
       expect(server.roomStore.getState(room.id).viewerDrawingEnabled).toBe(false);
+    } finally {
+      host.close();
+      viewer.close();
+      outsider.close();
+    }
+  });
+
+  it("relays chat, reactions, and raised hands for approved participants", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const url = getServerUrl(server);
+    const host = createClient(url, { transports: ["websocket"] });
+    const viewer = createClient(url, { transports: ["websocket"] });
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+
+      const chat = waitForEventWhere<ChatMessagePayload>(
+        host,
+        SOCKET_EVENTS.CHAT_MESSAGE,
+        (payload) => payload.roomId === room.id && payload.text === "Can you zoom in?"
+      );
+      viewer.emit(SOCKET_EVENTS.CHAT_SEND, { roomId: room.id, text: "Can you zoom in?" });
+      expect((await chat).senderName).toBe("Nani");
+
+      const reaction = waitForEventWhere<ReactionReceivedPayload>(
+        host,
+        SOCKET_EVENTS.REACTION_RECEIVED,
+        (payload) => payload.roomId === room.id && payload.reaction === "clap"
+      );
+      viewer.emit(SOCKET_EVENTS.REACTION_SEND, { roomId: room.id, reaction: "clap" });
+      expect((await reaction).senderName).toBe("Nani");
+
+      const raisedState = waitForEventWhere<RoomStatePayload>(
+        host,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.raisedHands.length === 1
+      );
+      viewer.emit(SOCKET_EVENTS.VIEWER_RAISE_HAND, { roomId: room.id, raised: true });
+      expect((await raisedState).raisedHands[0]?.displayName).toBe("Nani");
+    } finally {
+      host.close();
+      viewer.close();
+    }
+  });
+
+  it("enforces host interaction settings and blocks outsiders", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const url = getServerUrl(server);
+    const host = createClient(url, { transports: ["websocket"] });
+    const viewer = createClient(url, { transports: ["websocket"] });
+    const outsider = createClient(url, { transports: ["websocket"] });
+    let received = 0;
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer), waitForConnect(outsider)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+      host.on(SOCKET_EVENTS.CHAT_MESSAGE, () => {
+        received += 1;
+      });
+      host.on(SOCKET_EVENTS.REACTION_RECEIVED, () => {
+        received += 1;
+      });
+
+      host.emit(SOCKET_EVENTS.ROOM_INTERACTION_SETTINGS, { roomId: room.id, chatEnabled: false, reactionsEnabled: false });
+      await delay(20);
+      viewer.emit(SOCKET_EVENTS.CHAT_SEND, { roomId: room.id, text: "Blocked" });
+      viewer.emit(SOCKET_EVENTS.REACTION_SEND, { roomId: room.id, reaction: "heart" });
+      outsider.emit(SOCKET_EVENTS.CHAT_SEND, { roomId: room.id, text: "Outsider" });
+      outsider.emit(SOCKET_EVENTS.REACTION_SEND, { roomId: room.id, reaction: "clap" });
+      await delay(40);
+
+      expect(received).toBe(0);
+      expect(server.roomStore.getState(room.id)).toMatchObject({ chatEnabled: false, reactionsEnabled: false });
     } finally {
       host.close();
       viewer.close();

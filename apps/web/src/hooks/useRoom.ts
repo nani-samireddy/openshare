@@ -41,8 +41,12 @@ export function useRoom({ socket, roomId, role, displayName, password, hostToken
       hasPassword: false,
       viewerLimit: 20,
       persistent: false,
+      chatEnabled: true,
+      reactionsEnabled: true,
       viewerCount: 0,
       viewers: [],
+      raisedHands: [],
+      selfHandRaised: false,
       isHostPresent: false,
       isSharing: false
     }),

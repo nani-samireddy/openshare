@@ -9,6 +9,8 @@ export type PersistedRoom = {
   locked?: boolean;
   viewerLimit?: number;
   persistent?: boolean;
+  chatEnabled?: boolean;
+  reactionsEnabled?: boolean;
   wasSharing: boolean;
   createdAt: number;
   updatedAt: number;

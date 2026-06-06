@@ -33,6 +33,9 @@ export type Room = {
   locked: boolean;
   viewerLimit: number;
   persistent: boolean;
+  chatEnabled: boolean;
+  reactionsEnabled: boolean;
+  raisedHands: Set<string>;
   isSharing: boolean;
   wasSharing: boolean;
   createdAt: number;
@@ -46,6 +49,8 @@ export type CreateRoomOptions = {
   locked?: boolean;
   viewerLimit?: number;
   persistent?: boolean;
+  chatEnabled?: boolean;
+  reactionsEnabled?: boolean;
 };
 
 export type SocketRoomMembership = {
@@ -84,6 +89,9 @@ export class RoomStore {
         locked: persistedRoom.locked ?? false,
         viewerLimit: this.normalizeViewerLimit(persistedRoom.viewerLimit),
         persistent: persistedRoom.persistent ?? false,
+        chatEnabled: persistedRoom.chatEnabled ?? true,
+        reactionsEnabled: persistedRoom.reactionsEnabled ?? true,
+        raisedHands: new Set(),
         hostSocketId: null,
         viewers: new Map(),
         pendingViewers: new Map(),
@@ -115,6 +123,9 @@ export class RoomStore {
       locked: roomOptions.locked ?? false,
       viewerLimit: this.normalizeViewerLimit(roomOptions.viewerLimit),
       persistent: roomOptions.persistent ?? false,
+      chatEnabled: roomOptions.chatEnabled ?? true,
+      reactionsEnabled: roomOptions.reactionsEnabled ?? true,
+      raisedHands: new Set(),
       isSharing: false,
       wasSharing: false,
       createdAt: now,
@@ -246,6 +257,33 @@ export class RoomStore {
     return room;
   }
 
+  setInteractionSettings(roomId: string, settings: { chatEnabled?: boolean; reactionsEnabled?: boolean }, now = Date.now()): Room {
+    const room = this.requireRoom(roomId);
+    if (settings.chatEnabled !== undefined) {
+      room.chatEnabled = settings.chatEnabled;
+    }
+    if (settings.reactionsEnabled !== undefined) {
+      room.reactionsEnabled = settings.reactionsEnabled;
+    }
+    room.updatedAt = now;
+    this.queueSave(room);
+    return room;
+  }
+
+  setRaisedHand(roomId: string, viewerId: string, raised: boolean, now = Date.now()): Room {
+    const room = this.requireRoom(roomId);
+    if (!room.viewers.has(viewerId)) {
+      throw new Error("Viewer not found");
+    }
+    if (raised) {
+      room.raisedHands.add(viewerId);
+    } else {
+      room.raisedHands.delete(viewerId);
+    }
+    room.updatedAt = now;
+    return room;
+  }
+
   setSecurity(
     roomId: string,
     settings: { locked?: boolean; viewerLimit?: number; passwordHash?: string | null; persistent?: boolean },
@@ -277,6 +315,7 @@ export class RoomStore {
     }
 
     room.viewers.delete(viewerId);
+    room.raisedHands.delete(viewerId);
     this.socketMemberships.delete(viewer.socketId);
     room.updatedAt = now;
     this.queueSave(room);
@@ -323,6 +362,7 @@ export class RoomStore {
 
       if (membership.role === "viewer" && membership.participantId) {
         room.viewers.delete(membership.participantId);
+        room.raisedHands.delete(membership.participantId);
       }
 
       if (membership.role === "pending_viewer" && membership.participantId) {
@@ -391,6 +431,8 @@ export class RoomStore {
       hasPassword: Boolean(room.passwordHash),
       viewerLimit: room.viewerLimit,
       persistent: room.persistent,
+      chatEnabled: room.chatEnabled,
+      reactionsEnabled: room.reactionsEnabled,
       viewerCount: room.viewers.size,
       viewers: includeViewers
         ? Array.from(room.viewers.entries(), ([viewerId, viewer]) => ({
@@ -398,6 +440,13 @@ export class RoomStore {
             displayName: viewer.displayName
           }))
         : [],
+      raisedHands: includeViewers
+        ? Array.from(room.raisedHands, (viewerId) => ({
+            viewerId,
+            displayName: room.viewers.get(viewerId)?.displayName ?? "Viewer"
+          }))
+        : [],
+      selfHandRaised: Boolean(selfId && room.raisedHands.has(selfId)),
       isHostPresent: Boolean(room.hostSocketId),
       isSharing: room.isSharing,
       ...(selfId ? { selfId } : {})
@@ -435,6 +484,8 @@ export class RoomStore {
       locked: room.locked,
       viewerLimit: room.viewerLimit,
       persistent: room.persistent,
+      chatEnabled: room.chatEnabled,
+      reactionsEnabled: room.reactionsEnabled,
       wasSharing: room.wasSharing,
       createdAt: room.createdAt,
       updatedAt: room.updatedAt

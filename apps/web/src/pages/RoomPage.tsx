@@ -1,4 +1,4 @@
-import { CheckCheck, KeyRound, LockKeyhole, LogOut, Pencil, RefreshCw, ShieldCheck, UserMinus, Users, X } from "lucide-react";
+import { CheckCheck, KeyRound, LockKeyhole, MessageCircle, Palette, Pencil, RefreshCw, ShieldCheck, UserMinus, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -12,9 +12,10 @@ import {
 } from "@openshare/shared";
 import { Button } from "../components/Button";
 import { ConnectionStateBadge } from "../components/ConnectionStateBadge";
-import { CopyLinkButton } from "../components/CopyLinkButton";
-import { HostControls } from "../components/HostControls";
+import { ControlSection } from "../components/ControlSection";
 import { RoomStatus } from "../components/RoomStatus";
+import { RoomInteractions } from "../components/RoomInteractions";
+import { RoomQuickActions } from "../components/RoomQuickActions";
 import { ScreenVideo } from "../components/ScreenVideo";
 import { ViewerCount } from "../components/ViewerCount";
 import { WebRTCStatusBadge } from "../components/WebRTCStatusBadge";
@@ -163,6 +164,10 @@ export function RoomPage() {
     socket.emit(SOCKET_EVENTS.ANNOTATION_VIEWER_DRAWING, { roomId, enabled });
   }
 
+  function handleInteractionSettings(settings: { chatEnabled?: boolean; reactionsEnabled?: boolean }) {
+    socket.emit(SOCKET_EVENTS.ROOM_INTERACTION_SETTINGS, { roomId, ...settings });
+  }
+
   function handleSecurity(settings: { locked?: boolean; viewerLimit?: number; password?: string; clearPassword?: boolean; persistent?: boolean }) {
     socket.emit(SOCKET_EVENTS.ROOM_SECURITY, { roomId, ...settings });
   }
@@ -273,6 +278,15 @@ export function RoomPage() {
               isHost={role === "host"}
             />
             <RoomStatus state={roomState.state} role={role} />
+            <RoomInteractions
+              socket={socket}
+              roomId={roomId}
+              role={role}
+              selfHandRaised={roomState.selfHandRaised}
+              chatEnabled={roomState.chatEnabled}
+              reactionsEnabled={roomState.reactionsEnabled}
+              raisedHands={roomState.raisedHands}
+            />
             {webRTCState === "failed" ? (
               <div className="rounded-md border-2 border-ink bg-coral px-4 py-3 text-sm font-bold text-ink shadow-soft">
                 Peer connection failed. Try refreshing both room pages, or add a TURN server for stricter networks.
@@ -293,26 +307,34 @@ export function RoomPage() {
             ) : null}
           </div>
 
-          <aside className="flex flex-col gap-4">
+          <aside className="order-first flex flex-col gap-4 lg:order-none">
             <div className="rounded-md border-[3px] border-ink bg-sky p-4 shadow-sketch">
-              <p className="text-xs font-extrabold uppercase tracking-wider text-cream">
-                {role === "host" ? "Host controls" : "Room controls"}
-              </p>
-              <div className="mt-4 flex flex-col gap-3">
-                <CopyLinkButton url={inviteUrl} />
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-extrabold uppercase tracking-wider text-cream">{role === "host" ? "Host controls" : "Room controls"}</p>
+                <span className="rounded-full border-2 border-ink bg-cream px-2 py-0.5 text-xs font-extrabold text-ink">
+                  {roomState.viewerCount}/{roomState.viewerLimit}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-col gap-2">
+                <RoomQuickActions
+                  inviteUrl={inviteUrl}
+                  isHost={role === "host"}
+                  isSharing={Boolean(screenShare.stream)}
+                  isStarting={screenShare.isStarting}
+                  canShare={screenShare.isSupported}
+                  onStart={handleStartSharing}
+                  onStop={handleStopSharing}
+                  onLeave={handleLeave}
+                />
                 {role === "host" ? (
-                  <HostControls
-                    isSharing={Boolean(screenShare.stream)}
-                    isStarting={screenShare.isStarting}
-                    canShare={screenShare.isSupported}
-                    onStart={handleStartSharing}
-                    onStop={handleStopSharing}
-                  />
-                ) : null}
-                {role === "host" ? (
-                  <div className="rounded-md border-2 border-ink bg-cream p-3">
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Room access</p>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
+                  <ControlSection
+                    title="Access"
+                    icon={<ShieldCheck aria-hidden className="h-4 w-4" />}
+                    summary={`${roomState.locked ? "Locked" : roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "Open room" : "Approval required"} · ${
+                      roomState.hasPassword ? "Password" : "No password"
+                    }`}
+                  >
+                    <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         aria-pressed={roomState.accessMode === ROOM_ACCESS_MODES.APPROVAL}
@@ -336,20 +358,6 @@ export function RoomPage() {
                         Open
                       </button>
                     </div>
-                    <p className="mt-3 text-xs font-bold text-ink/75">
-                      {roomState.accessMode === ROOM_ACCESS_MODES.OPEN
-                        ? "Named viewers join automatically."
-                        : "New viewers wait for host approval."}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="rounded-md border-2 border-ink bg-cream px-3 py-2 text-xs font-extrabold text-ink">
-                    {roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "Open room" : "Host approval required"}
-                  </div>
-                )}
-                {role === "host" ? (
-                  <div className="rounded-md border-2 border-ink bg-cream p-3">
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Room security</p>
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <button
                         type="button"
@@ -417,11 +425,14 @@ export function RoomPage() {
                         </button>
                       ) : null}
                     </div>
-                  </div>
+                  </ControlSection>
                 ) : null}
                 {role === "host" ? (
-                  <div className="rounded-md border-2 border-ink bg-cream p-3">
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Annotations</p>
+                  <ControlSection
+                    title="Preferences"
+                    icon={<Palette aria-hidden className="h-4 w-4" />}
+                    summary={`Drawing ${roomState.viewerDrawingEnabled ? "on" : "off"} · Chat ${roomState.chatEnabled ? "on" : "off"}`}
+                  >
                     <button
                       type="button"
                       aria-pressed={roomState.viewerDrawingEnabled}
@@ -433,82 +444,119 @@ export function RoomPage() {
                       <Pencil aria-hidden className="h-4 w-4" />
                       {roomState.viewerDrawingEnabled ? "Viewer drawing enabled" : "Viewer drawing disabled"}
                     </button>
-                  </div>
-                ) : null}
-                {role === "host" && pendingRequests.length > 0 ? (
-                  <div className="rounded-md border-2 border-ink bg-cream p-3">
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Join requests</p>
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <Button
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      <button
                         type="button"
-                        className="min-h-10 px-2 text-xs"
-                        icon={<CheckCheck aria-hidden className="h-4 w-4" />}
-                        onClick={() => handleBulkApproval("approve")}
+                        aria-pressed={roomState.chatEnabled}
+                        onClick={() => handleInteractionSettings({ chatEnabled: !roomState.chatEnabled })}
+                        className={`min-h-10 rounded-md border-2 border-ink px-2 text-xs font-extrabold ${
+                          roomState.chatEnabled ? "bg-sun" : "bg-white"
+                        }`}
                       >
-                        Approve all
-                      </Button>
-                      <Button
+                        Chat
+                      </button>
+                      <button
                         type="button"
-                        variant="danger"
-                        className="min-h-10 px-2 text-xs"
-                        icon={<X aria-hidden className="h-4 w-4" />}
-                        onClick={() => handleBulkApproval("deny")}
+                        aria-pressed={roomState.reactionsEnabled}
+                        onClick={() => handleInteractionSettings({ reactionsEnabled: !roomState.reactionsEnabled })}
+                        className={`min-h-10 rounded-md border-2 border-ink px-2 text-xs font-extrabold ${
+                          roomState.reactionsEnabled ? "bg-sun" : "bg-white"
+                        }`}
                       >
-                        Deny all
-                      </Button>
+                        Reactions
+                      </button>
                     </div>
-                    <div className="mt-3 flex flex-col gap-3">
-                      {pendingRequests.map((request) => (
-                        <div key={request.requestId} className="rounded-md border-2 border-ink bg-white p-3">
-                          <p className="text-sm font-extrabold text-ink">{request.displayName}</p>
-                          <div className="mt-3 grid grid-cols-2 gap-2">
-                            <Button type="button" className="min-h-10 px-3" onClick={() => handleApproval(request.requestId, true)}>
-                              Approve
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="danger"
-                              className="min-h-10 px-3"
-                              onClick={() => handleApproval(request.requestId, false)}
-                            >
-                              Deny
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  </ControlSection>
                 ) : null}
-                {role === "host" && roomState.viewers.length > 0 ? (
-                  <div className="rounded-md border-2 border-ink bg-cream p-3">
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-ink/70">Viewers</p>
-                    <div className="mt-3 flex flex-col gap-2">
-                      {roomState.viewers.map((viewer) => (
-                        <div key={viewer.viewerId} className="flex items-center justify-between gap-3 rounded-md border-2 border-ink bg-white px-3 py-2">
-                          <span className="min-w-0 truncate text-sm font-extrabold text-ink">{viewer.displayName}</span>
-                          <button
+                {role === "host" ? (
+                  <ControlSection
+                    title="Participants"
+                    icon={<Users aria-hidden className="h-4 w-4" />}
+                    summary={`${roomState.viewerCount} viewers · ${pendingRequests.length} waiting · ${roomState.raisedHands.length} hands`}
+                    badge={pendingRequests.length + roomState.raisedHands.length}
+                  >
+                    {pendingRequests.length > 0 ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
                             type="button"
-                            aria-label={`Remove ${viewer.displayName}`}
-                            title={`Remove ${viewer.displayName}`}
-                            onClick={() => handleKickViewer(viewer.viewerId)}
-                            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-ink bg-coral"
+                            className="min-h-9 px-2 text-xs"
+                            icon={<CheckCheck aria-hidden className="h-4 w-4" />}
+                            onClick={() => handleBulkApproval("approve")}
                           >
-                            <UserMinus aria-hidden className="h-4 w-4" />
-                          </button>
+                            Approve all
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="danger"
+                            className="min-h-9 px-2 text-xs"
+                            icon={<X aria-hidden className="h-4 w-4" />}
+                            onClick={() => handleBulkApproval("deny")}
+                          >
+                            Deny all
+                          </Button>
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                        <div className="mt-2 flex flex-col gap-2">
+                          {pendingRequests.map((request) => (
+                            <div key={request.requestId} className="flex items-center justify-between gap-2 rounded-md border-2 border-ink bg-white px-2 py-2">
+                              <span className="min-w-0 truncate text-xs font-extrabold text-ink">{request.displayName}</span>
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  aria-label={`Approve ${request.displayName}`}
+                                  onClick={() => handleApproval(request.requestId, true)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border-2 border-ink bg-sun"
+                                >
+                                  <CheckCheck aria-hidden className="h-3 w-3" />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Deny ${request.displayName}`}
+                                  onClick={() => handleApproval(request.requestId, false)}
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border-2 border-ink bg-coral"
+                                >
+                                  <X aria-hidden className="h-3 w-3" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                    {roomState.viewers.length > 0 ? (
+                      <div className="mt-2 flex flex-col gap-2">
+                        {roomState.viewers.map((viewer) => (
+                          <div key={viewer.viewerId} className="flex items-center justify-between gap-3 rounded-md border-2 border-ink bg-white px-3 py-2">
+                            <span className="min-w-0 truncate text-sm font-extrabold text-ink">{viewer.displayName}</span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${viewer.displayName}`}
+                              title={`Remove ${viewer.displayName}`}
+                              onClick={() => handleKickViewer(viewer.viewerId)}
+                              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-ink bg-coral"
+                            >
+                              <UserMinus aria-hidden className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {pendingRequests.length === 0 && roomState.viewers.length === 0 ? (
+                      <p className="text-xs font-bold text-ink/60">No participants yet.</p>
+                    ) : null}
+                  </ControlSection>
                 ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={handleLeave}
-                  icon={<LogOut aria-hidden className="h-4 w-4" />}
-                  className="justify-start"
-                >
-                  Leave room
-                </Button>
+                {role === "viewer" ? (
+                  <ControlSection
+                    title="Room"
+                    icon={<MessageCircle aria-hidden className="h-4 w-4" />}
+                    summary={roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "Open room" : "Host approval required"}
+                  >
+                    <p className="text-xs font-bold text-ink/70">
+                      {roomState.locked ? "The room is locked to new viewers." : "The room is accepting new viewers."}
+                    </p>
+                  </ControlSection>
+                ) : null}
               </div>
             </div>
           </aside>

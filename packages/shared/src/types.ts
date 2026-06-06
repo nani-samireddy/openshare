@@ -1,9 +1,10 @@
-import type { ANNOTATION_COLORS, ROOM_ACCESS_MODES, ROOM_STATES } from "./constants.js";
+import type { ANNOTATION_COLORS, REACTION_TYPES, ROOM_ACCESS_MODES, ROOM_STATES } from "./constants.js";
 
 export type RoomRole = "host" | "viewer";
 export type RoomState = (typeof ROOM_STATES)[keyof typeof ROOM_STATES];
 export type RoomAccessMode = (typeof ROOM_ACCESS_MODES)[keyof typeof ROOM_ACCESS_MODES];
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
+export type ReactionType = (typeof REACTION_TYPES)[number];
 
 export type AnnotationPoint = {
   x: number;
@@ -50,8 +51,12 @@ export type RoomStatePayload = {
   hasPassword: boolean;
   viewerLimit: number;
   persistent: boolean;
+  chatEnabled: boolean;
+  reactionsEnabled: boolean;
   viewerCount: number;
   viewers: RoomViewer[];
+  raisedHands: RoomViewer[];
+  selfHandRaised: boolean;
   isHostPresent: boolean;
   isSharing: boolean;
   selfId?: string;
@@ -103,6 +108,46 @@ export type RoomSecurityPayload = {
   password?: string;
   clearPassword?: boolean;
   persistent?: boolean;
+};
+
+export type RoomInteractionSettingsPayload = {
+  roomId: string;
+  chatEnabled?: boolean;
+  reactionsEnabled?: boolean;
+};
+
+export type ViewerRaiseHandPayload = {
+  roomId: string;
+  raised: boolean;
+};
+
+export type ViewerLowerHandPayload = {
+  roomId: string;
+  viewerId: string;
+};
+
+export type ChatSendPayload = {
+  roomId: string;
+  text: string;
+};
+
+export type ChatMessagePayload = {
+  roomId: string;
+  messageId: string;
+  senderName: string;
+  senderRole: RoomRole;
+  text: string;
+  sentAt: number;
+};
+
+export type ReactionSendPayload = {
+  roomId: string;
+  reaction: ReactionType;
+};
+
+export type ReactionReceivedPayload = ReactionSendPayload & {
+  reactionId: string;
+  senderName: string;
 };
 
 export type ViewerApprovedPayload = {

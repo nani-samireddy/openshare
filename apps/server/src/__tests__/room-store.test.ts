@@ -64,6 +64,23 @@ describe("RoomStore", () => {
     expect(store.getState(room.id).viewerDrawingEnabled).toBe(false);
   });
 
+  it("tracks interaction settings and raised hands", () => {
+    const store = new RoomStore();
+    const room = store.createRoom();
+    const { requestId } = store.requestViewerJoin(room.id, "viewer", "Nani");
+    const { viewerId } = store.approveViewer(room.id, requestId);
+
+    store.setInteractionSettings(room.id, { chatEnabled: false, reactionsEnabled: false });
+    store.setRaisedHand(room.id, viewerId, true);
+
+    expect(store.getState(room.id, viewerId)).toMatchObject({
+      chatEnabled: false,
+      reactionsEnabled: false,
+      selfHandRaised: true
+    });
+    expect(store.getState(room.id, undefined, true).raisedHands).toEqual([{ viewerId, displayName: "Nani" }]);
+  });
+
   it("enforces host tokens, passwords, locks, and viewer limits", () => {
     const store = new RoomStore();
     const room = store.createRoom({
@@ -129,6 +146,8 @@ describe("RoomStore", () => {
       locked: false,
       viewerLimit: 20,
       persistent: false,
+      chatEnabled: true,
+      reactionsEnabled: true,
       hostSocketId: null,
       isSharing: false,
       wasSharing: true
