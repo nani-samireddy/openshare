@@ -1,6 +1,7 @@
 import type { ANNOTATION_COLORS, REACTION_TYPES, ROOM_ACCESS_MODES, ROOM_STATES } from "./constants.js";
 
 export type RoomRole = "host" | "viewer";
+export type PresenterId = "host" | string;
 export type RoomState = (typeof ROOM_STATES)[keyof typeof ROOM_STATES];
 export type RoomAccessMode = (typeof ROOM_ACCESS_MODES)[keyof typeof ROOM_ACCESS_MODES];
 export type AnnotationColor = (typeof ANNOTATION_COLORS)[number];
@@ -59,6 +60,9 @@ export type RoomStatePayload = {
   selfHandRaised: boolean;
   isHostPresent: boolean;
   isSharing: boolean;
+  presenterId: PresenterId;
+  presenterName: string;
+  selfIsPresenter: boolean;
   selfId?: string;
 };
 
@@ -170,9 +174,35 @@ export type ViewerKickedPayload = {
   reason: string;
 };
 
-export type ClientOfferPayload = {
+export type PresenterInvitePayload = {
   roomId: string;
   viewerId: string;
+};
+
+export type PresenterInvitedPayload = {
+  roomId: string;
+  invitedBy: string;
+};
+
+export type PresenterResponsePayload = {
+  roomId: string;
+  accepted: boolean;
+};
+
+export type PresenterResponseReceivedPayload = PresenterResponsePayload & {
+  viewerId: string;
+  displayName: string;
+};
+
+export type PresenterChangedPayload = {
+  roomId: string;
+  presenterId: PresenterId;
+  presenterName: string;
+};
+
+export type ClientOfferPayload = {
+  roomId: string;
+  targetId: PresenterId;
   sdp: RTCSessionDescriptionInit;
 };
 
@@ -184,7 +214,7 @@ export type ClientAnswerPayload = {
 };
 
 export type ServerAnswerPayload = ClientAnswerPayload & {
-  viewerId: string;
+  fromId: PresenterId;
 };
 
 export type ClientIceCandidatePayload = {

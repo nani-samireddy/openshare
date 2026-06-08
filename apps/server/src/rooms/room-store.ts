@@ -6,6 +6,7 @@ import {
   ROOM_ID_LENGTH,
   ROOM_STATES,
   type RoomAccessMode,
+  type PresenterId,
   type RoomStatePayload,
   isValidRoomId
 } from "@openshare/shared";
@@ -36,6 +37,8 @@ export type Room = {
   chatEnabled: boolean;
   reactionsEnabled: boolean;
   raisedHands: Set<string>;
+  presenterId: PresenterId;
+  pendingPresenterId: string | null;
   isSharing: boolean;
   wasSharing: boolean;
   createdAt: number;
@@ -92,6 +95,8 @@ export class RoomStore {
         chatEnabled: persistedRoom.chatEnabled ?? true,
         reactionsEnabled: persistedRoom.reactionsEnabled ?? true,
         raisedHands: new Set(),
+        presenterId: "host",
+        pendingPresenterId: null,
         hostSocketId: null,
         viewers: new Map(),
         pendingViewers: new Map(),
@@ -126,6 +131,8 @@ export class RoomStore {
       chatEnabled: roomOptions.chatEnabled ?? true,
       reactionsEnabled: roomOptions.reactionsEnabled ?? true,
       raisedHands: new Set(),
+      presenterId: "host",
+      pendingPresenterId: null,
       isSharing: false,
       wasSharing: false,
       createdAt: now,
@@ -316,6 +323,13 @@ export class RoomStore {
 
     room.viewers.delete(viewerId);
     room.raisedHands.delete(viewerId);
+    if (room.presenterId === viewerId) {
+      room.presenterId = "host";
+      room.isSharing = false;
+    }
+    if (room.pendingPresenterId === viewerId) {
+      room.pendingPresenterId = null;
+    }
     this.socketMemberships.delete(viewer.socketId);
     room.updatedAt = now;
     this.queueSave(room);
@@ -328,6 +342,40 @@ export class RoomStore {
     room.wasSharing = room.wasSharing || isSharing;
     room.updatedAt = now;
     this.queueSave(room);
+    return room;
+  }
+
+  invitePresenter(roomId: string, viewerId: string, now = Date.now()): ViewerRecord {
+    const room = this.requireRoom(roomId);
+    const viewer = room.viewers.get(viewerId);
+    if (!viewer) {
+      throw new Error("Viewer not found");
+    }
+    room.pendingPresenterId = viewerId;
+    room.updatedAt = now;
+    return viewer;
+  }
+
+  respondToPresenterInvite(roomId: string, viewerId: string, accepted: boolean, now = Date.now()): Room {
+    const room = this.requireRoom(roomId);
+    if (room.pendingPresenterId !== viewerId || !room.viewers.has(viewerId)) {
+      throw new Error("Presenter invitation not found");
+    }
+    room.pendingPresenterId = null;
+    if (accepted) {
+      room.presenterId = viewerId;
+      room.isSharing = false;
+    }
+    room.updatedAt = now;
+    return room;
+  }
+
+  reclaimPresenter(roomId: string, now = Date.now()): Room {
+    const room = this.requireRoom(roomId);
+    room.presenterId = "host";
+    room.pendingPresenterId = null;
+    room.isSharing = false;
+    room.updatedAt = now;
     return room;
   }
 
@@ -347,6 +395,28 @@ export class RoomStore {
     return this.rooms.get(roomId)?.viewers.get(viewerId);
   }
 
+  getParticipantSocketId(roomId: string, participantId: PresenterId): string | undefined {
+    return participantId === "host" ? this.getHostSocketId(roomId) : this.getViewerSocketId(roomId, participantId);
+  }
+
+  getPresenterSocketId(roomId: string): string | undefined {
+    const room = this.rooms.get(roomId);
+    return room ? this.getParticipantSocketId(roomId, room.presenterId) : undefined;
+  }
+
+  getParticipantId(socketId: string): PresenterId | undefined {
+    const membership = this.socketMemberships.get(socketId);
+    if (membership?.role === "host") {
+      return "host";
+    }
+    return membership?.role === "viewer" ? membership.participantId : undefined;
+  }
+
+  isPresenter(socketId: string, roomId: string): boolean {
+    const room = this.rooms.get(roomId);
+    return Boolean(room && this.getParticipantId(socketId) === room.presenterId);
+  }
+
   leaveBySocket(socketId: string, now = Date.now()): SocketRoomMembership | undefined {
     const membership = this.socketMemberships.get(socketId);
     if (!membership) {
@@ -358,11 +428,20 @@ export class RoomStore {
       if (membership.role === "host" && room.hostSocketId === socketId) {
         room.hostSocketId = null;
         room.isSharing = false;
+        room.presenterId = "host";
+        room.pendingPresenterId = null;
       }
 
       if (membership.role === "viewer" && membership.participantId) {
         room.viewers.delete(membership.participantId);
         room.raisedHands.delete(membership.participantId);
+        if (room.presenterId === membership.participantId) {
+          room.presenterId = "host";
+          room.isSharing = false;
+        }
+        if (room.pendingPresenterId === membership.participantId) {
+          room.pendingPresenterId = null;
+        }
       }
 
       if (membership.role === "pending_viewer" && membership.participantId) {
@@ -449,6 +528,9 @@ export class RoomStore {
       selfHandRaised: Boolean(selfId && room.raisedHands.has(selfId)),
       isHostPresent: Boolean(room.hostSocketId),
       isSharing: room.isSharing,
+      presenterId: room.presenterId,
+      presenterName: room.presenterId === "host" ? "Host" : room.viewers.get(room.presenterId)?.displayName ?? "Viewer",
+      selfIsPresenter: Boolean(selfId && room.presenterId === selfId),
       ...(selfId ? { selfId } : {})
     };
   }

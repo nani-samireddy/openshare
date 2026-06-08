@@ -19,6 +19,8 @@ import {
   type ChatMessagePayload,
   type ChatSendPayload,
   type ReactionSendPayload,
+  type PresenterInvitePayload,
+  type PresenterResponsePayload,
   type RoomInteractionSettingsPayload,
   type RoomAccessModePayload,
   type RoomJoinAck,
@@ -54,7 +56,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId));
     const hostSocketId = roomStore.getHostSocketId(roomId);
     if (hostSocketId) {
-      io.to(hostSocketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId, undefined, true));
+      io.to(hostSocketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId, "host", true));
     }
     const room = roomStore.getRoom(roomId);
     if (room) {
@@ -152,7 +154,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
         if (payload.role === "host") {
           const room = roomStore.joinHost(payload.roomId, socket.id, payload.hostToken);
           socket.join(roomChannel(room.id));
-          socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, undefined, true));
+          socket.emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(room.id, "host", true));
           for (const pendingViewer of room.pendingViewers.values()) {
             socket.emit(SOCKET_EVENTS.VIEWER_REQUESTED, {
               roomId: room.id,
@@ -357,6 +359,70 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       }
     });
 
+    socket.on(SOCKET_EVENTS.PRESENTER_INVITE, (payload: PresenterInvitePayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      try {
+        const viewer = roomStore.invitePresenter(payload.roomId, payload.viewerId);
+        io.to(viewer.socketId).emit(SOCKET_EVENTS.PRESENTER_INVITED, {
+          roomId: payload.roomId,
+          invitedBy: "Host"
+        });
+      } catch {
+        return;
+      }
+    });
+
+    socket.on(SOCKET_EVENTS.PRESENTER_RESPONSE, (payload: PresenterResponsePayload) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "viewer" || !membership.participantId || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      try {
+        const room = roomStore.respondToPresenterInvite(payload.roomId, membership.participantId, Boolean(payload.accepted));
+        const hostSocketId = roomStore.getHostSocketId(payload.roomId);
+        if (hostSocketId) {
+          io.to(hostSocketId).emit(SOCKET_EVENTS.PRESENTER_RESPONSE, {
+            roomId: payload.roomId,
+            accepted: Boolean(payload.accepted),
+            viewerId: membership.participantId,
+            displayName: membership.displayName ?? "Viewer"
+          });
+        }
+        if (payload.accepted) {
+          io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId: payload.roomId });
+          io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_CHANGED, {
+            roomId: payload.roomId,
+            presenterId: room.presenterId,
+            presenterName: membership.displayName ?? "Viewer"
+          });
+          emitRoomState(payload.roomId);
+        }
+      } catch {
+        return;
+      }
+    });
+
+    socket.on(SOCKET_EVENTS.PRESENTER_RECLAIM, (payload: { roomId: string }) => {
+      const membership = roomStore.getMembership(socket.id);
+      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+        return;
+      }
+
+      const room = roomStore.reclaimPresenter(payload.roomId);
+      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId: payload.roomId });
+      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_CHANGED, {
+        roomId: payload.roomId,
+        presenterId: room.presenterId,
+        presenterName: "Host"
+      });
+      emitRoomState(payload.roomId);
+    });
+
     socket.on(SOCKET_EVENTS.ANNOTATION_STROKE, (payload: AnnotationStrokePayload | undefined) => {
       if (!isValidStroke(payload) || !canAnnotate(socket.id, payload.roomId)) {
         return;
@@ -388,65 +454,45 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       handleLeave(socket.id, false);
     });
 
-    socket.on(SOCKET_EVENTS.HOST_STARTED_SHARING, (payload: { roomId: string }) => {
-      const membership = roomStore.getMembership(socket.id);
-      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+    socket.on(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, (payload: { roomId: string }) => {
+      if (!roomStore.isPresenter(socket.id, payload.roomId)) {
         return;
       }
 
       roomStore.markSharing(payload.roomId, true);
-      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.HOST_STARTED_SHARING, { roomId: payload.roomId });
+      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, { roomId: payload.roomId });
       emitRoomState(payload.roomId);
-
-      const room = roomStore.getRoom(payload.roomId);
-      if (room) {
-        for (const viewerId of room.viewers.keys()) {
-          const viewer = roomStore.getViewer(payload.roomId, viewerId);
-          socket.emit(SOCKET_EVENTS.VIEWER_JOINED, {
-            roomId: payload.roomId,
-            viewerId,
-            displayName: viewer?.displayName ?? "Viewer"
-          });
-        }
-      }
     });
 
-    socket.on(SOCKET_EVENTS.HOST_STOPPED_SHARING, (payload: { roomId: string }) => {
-      const membership = roomStore.getMembership(socket.id);
-      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+    socket.on(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, (payload: { roomId: string }) => {
+      if (!roomStore.isPresenter(socket.id, payload.roomId)) {
         return;
       }
 
       roomStore.markSharing(payload.roomId, false);
-      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.HOST_STOPPED_SHARING, { roomId: payload.roomId });
+      io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId: payload.roomId });
       emitRoomState(payload.roomId);
     });
 
     socket.on(SOCKET_EVENTS.WEBRTC_OFFER, (payload: ClientOfferPayload) => {
-      const membership = roomStore.getMembership(socket.id);
-      if (membership?.role !== "host" || membership.roomId !== payload.roomId) {
+      if (!roomStore.isPresenter(socket.id, payload.roomId)) {
         return;
       }
 
-      const viewerSocketId = roomStore.getViewerSocketId(payload.roomId, payload.viewerId);
-      if (viewerSocketId) {
-        io.to(viewerSocketId).emit(SOCKET_EVENTS.WEBRTC_OFFER, payload);
+      const targetSocketId = roomStore.getParticipantSocketId(payload.roomId, payload.targetId);
+      if (targetSocketId && targetSocketId !== socket.id) {
+        io.to(targetSocketId).emit(SOCKET_EVENTS.WEBRTC_OFFER, payload);
       }
     });
 
     socket.on(SOCKET_EVENTS.WEBRTC_ANSWER, (payload: ClientAnswerPayload) => {
-      const membership = roomStore.getMembership(socket.id);
-      if (membership?.role !== "viewer" || !membership.participantId || membership.roomId !== payload.roomId) {
+      const fromId = roomStore.getParticipantId(socket.id);
+      const presenterSocketId = roomStore.getPresenterSocketId(payload.roomId);
+      if (!fromId || !presenterSocketId || presenterSocketId === socket.id) {
         return;
       }
 
-      const hostSocketId = roomStore.getHostSocketId(payload.roomId);
-      if (hostSocketId) {
-        io.to(hostSocketId).emit(SOCKET_EVENTS.WEBRTC_ANSWER, {
-          ...payload,
-          viewerId: membership.participantId
-        });
-      }
+      io.to(presenterSocketId).emit(SOCKET_EVENTS.WEBRTC_ANSWER, { ...payload, fromId });
     });
 
     socket.on(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, (payload: ClientIceCandidatePayload) => {
@@ -455,27 +501,17 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
         return;
       }
 
-      if (membership.role === "host" && payload.targetId) {
-        const viewerSocketId = roomStore.getViewerSocketId(payload.roomId, payload.targetId);
-        if (viewerSocketId) {
-          io.to(viewerSocketId).emit(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, {
-            roomId: payload.roomId,
-            fromId: "host",
-            candidate: payload.candidate
-          });
-        }
+      const fromId = roomStore.getParticipantId(socket.id);
+      if (!fromId || !payload.targetId) {
         return;
       }
-
-      if (membership.role === "viewer" && membership.participantId) {
-        const hostSocketId = roomStore.getHostSocketId(payload.roomId);
-        if (hostSocketId) {
-          io.to(hostSocketId).emit(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, {
-            roomId: payload.roomId,
-            fromId: membership.participantId,
-            candidate: payload.candidate
-          });
-        }
+      const targetSocketId = roomStore.getParticipantSocketId(payload.roomId, payload.targetId);
+      if (targetSocketId && targetSocketId !== socket.id) {
+        io.to(targetSocketId).emit(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, {
+          roomId: payload.roomId,
+          fromId,
+          candidate: payload.candidate
+        });
       }
     });
 
@@ -485,6 +521,8 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
   });
 
   function handleLeave(socketId: string, isDisconnect: boolean): void {
+    const previousMembership = roomStore.getMembership(socketId);
+    const wasPresenter = previousMembership ? roomStore.isPresenter(socketId, previousMembership.roomId) : false;
     const membership = roomStore.leaveBySocket(socketId);
     if (!membership) {
       return;
@@ -495,7 +533,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       const room = roomStore.getRoom(roomId);
       if (room) {
         io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId));
-        io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.HOST_STOPPED_SHARING, { roomId });
+        io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId });
         if (!isDisconnect && !room.persistent) {
           roomStore.deleteRoom(roomId);
         }
@@ -504,6 +542,10 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     }
 
     if (membership.participantId) {
+      if (wasPresenter) {
+        io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId });
+        io.to(roomChannel(roomId)).emit(SOCKET_EVENTS.PRESENTER_CHANGED, { roomId, presenterId: "host", presenterName: "Host" });
+      }
       const hostSocketId = roomStore.getHostSocketId(roomId);
       if (hostSocketId) {
           io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_LEFT, {
