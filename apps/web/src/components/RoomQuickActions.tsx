@@ -3,7 +3,7 @@ import { useState } from "react";
 
 type RoomQuickActionsProps = {
   inviteUrl: string;
-  isHost: boolean;
+  canPresent: boolean;
   isSharing: boolean;
   isStarting: boolean;
   canShare: boolean;
@@ -14,7 +14,7 @@ type RoomQuickActionsProps = {
 
 export function RoomQuickActions({
   inviteUrl,
-  isHost,
+  canPresent,
   isSharing,
   isStarting,
   canShare,
@@ -34,7 +34,7 @@ export function RoomQuickActions({
     "inline-flex h-11 w-full items-center justify-center rounded-md border-2 border-ink text-ink transition hover:-translate-y-0.5 disabled:translate-y-0 disabled:opacity-45";
 
   return (
-    <div className={`grid gap-2 ${isHost ? "grid-cols-4" : "grid-cols-2"}`}>
+    <div className={`grid gap-2 ${canPresent ? "grid-cols-4" : "grid-cols-2"}`}>
       <button
         type="button"
         aria-label={copied ? "Invite link copied" : "Copy invite link"}
@@ -44,7 +44,7 @@ export function RoomQuickActions({
       >
         {copied ? <Check aria-hidden className="h-5 w-5" /> : <Copy aria-hidden className="h-5 w-5" />}
       </button>
-      {isHost ? (
+      {canPresent ? (
         <>
           <button
             type="button"

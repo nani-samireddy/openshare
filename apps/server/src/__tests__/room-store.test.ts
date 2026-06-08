@@ -39,7 +39,10 @@ describe("RoomStore", () => {
     expect(store.getState(room.id, viewerId)).toMatchObject({
       state: ROOM_STATES.WAITING_FOR_HOST,
       viewerCount: 1,
-      selfId: viewerId
+      selfId: viewerId,
+      presenterId: "host",
+      presenterName: "Host",
+      selfIsPresenter: false
     });
   });
 
@@ -53,6 +56,34 @@ describe("RoomStore", () => {
 
     store.markSharing(room.id, false);
     expect(store.getState(room.id).state).toBe(ROOM_STATES.HOST_STOPPED);
+  });
+
+  it("hands presenter control to an approved viewer and lets host reclaim it", () => {
+    const store = new RoomStore();
+    const room = store.createRoom();
+    store.joinHost(room.id, "socket-host");
+    const { requestId } = store.requestViewerJoin(room.id, "socket-viewer", "Nani");
+    const { viewerId } = store.approveViewer(room.id, requestId);
+
+    expect(store.invitePresenter(room.id, viewerId).displayName).toBe("Nani");
+    store.respondToPresenterInvite(room.id, viewerId, true);
+
+    expect(store.getState(room.id, viewerId, true)).toMatchObject({
+      presenterId: viewerId,
+      presenterName: "Nani",
+      selfIsPresenter: true,
+      isSharing: false
+    });
+
+    store.markSharing(room.id, true);
+    store.reclaimPresenter(room.id);
+
+    expect(store.getState(room.id, "host", true)).toMatchObject({
+      presenterId: "host",
+      presenterName: "Host",
+      selfIsPresenter: true,
+      isSharing: false
+    });
   });
 
   it("changes viewer drawing permission", () => {

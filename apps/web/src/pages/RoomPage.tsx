@@ -1,4 +1,18 @@
-import { CheckCheck, KeyRound, LockKeyhole, MessageCircle, Palette, Pencil, RefreshCw, ShieldCheck, UserMinus, Users, X } from "lucide-react";
+import {
+  CheckCheck,
+  KeyRound,
+  LockKeyhole,
+  MessageCircle,
+  Palette,
+  Pencil,
+  Presentation,
+  RefreshCw,
+  RotateCcw,
+  ShieldCheck,
+  UserMinus,
+  Users,
+  X
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -53,8 +67,10 @@ export function RoomPage() {
   });
   const { iceServers, error: configError } = usePublicConfig();
   const screenShare = useScreenShare();
+  const { stopSharing } = screenShare;
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [webRTCState, setWebRTCState] = useState<WebRTCConnectionState>("idle");
+  const [presenterInviteOpen, setPresenterInviteOpen] = useState(false);
   const wasSharingRef = useRef(false);
 
   useEffect(() => {
@@ -65,6 +81,9 @@ export function RoomPage() {
     socket,
     roomId,
     role,
+    selfId: roomState.selfId,
+    presenterId: roomState.presenterId,
+    viewers: roomState.viewers,
     iceServers,
     localStream: screenShare.stream,
     onConnectionState: setWebRTCState,
@@ -72,7 +91,11 @@ export function RoomPage() {
   });
 
   useEffect(() => {
-    if (role !== "host") {
+    if (!roomState.selfIsPresenter) {
+      wasSharingRef.current = false;
+      if (screenShare.stream) {
+        stopSharing();
+      }
       return;
     }
 
@@ -83,9 +106,9 @@ export function RoomPage() {
 
     if (wasSharingRef.current) {
       wasSharingRef.current = false;
-      socket.emit(SOCKET_EVENTS.HOST_STOPPED_SHARING, { roomId });
+      socket.emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId });
     }
-  }, [role, roomId, screenShare.stream, socket]);
+  }, [roomId, roomState.selfIsPresenter, screenShare.stream, socket, stopSharing]);
 
   useEffect(() => {
     if (role !== "host") {
@@ -111,17 +134,34 @@ export function RoomPage() {
     };
   }, [role, roomId, socket]);
 
+  useEffect(() => {
+    if (role !== "viewer") {
+      return;
+    }
+
+    function handlePresenterInvited(payload: { roomId: string }) {
+      if (payload.roomId === roomId) {
+        setPresenterInviteOpen(true);
+      }
+    }
+
+    socket.on(SOCKET_EVENTS.PRESENTER_INVITED, handlePresenterInvited);
+    return () => {
+      socket.off(SOCKET_EVENTS.PRESENTER_INVITED, handlePresenterInvited);
+    };
+  }, [role, roomId, socket]);
+
   async function handleStartSharing() {
     const stream = await screenShare.startSharing();
     if (stream) {
-      socket.emit(SOCKET_EVENTS.HOST_STARTED_SHARING, { roomId });
+      socket.emit(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, { roomId });
     }
   }
 
   function handleStopSharing() {
     screenShare.stopSharing();
-    if (role === "host") {
-      socket.emit(SOCKET_EVENTS.HOST_STOPPED_SHARING, { roomId });
+    if (roomState.selfIsPresenter) {
+      socket.emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId });
     }
   }
 
@@ -185,6 +225,19 @@ export function RoomPage() {
     socket.emit(SOCKET_EVENTS.VIEWER_KICK, { roomId, viewerId });
   }
 
+  function handlePresenterInvite(viewerId: string) {
+    socket.emit(SOCKET_EVENTS.PRESENTER_INVITE, { roomId, viewerId });
+  }
+
+  function handlePresenterResponse(accepted: boolean) {
+    socket.emit(SOCKET_EVENTS.PRESENTER_RESPONSE, { roomId, accepted });
+    setPresenterInviteOpen(false);
+  }
+
+  function handlePresenterReclaim() {
+    socket.emit(SOCKET_EVENTS.PRESENTER_RECLAIM, { roomId });
+  }
+
   if (!isValidRoomId(roomId)) {
     return <RoomShell message="This room link is invalid." />;
   }
@@ -193,13 +246,13 @@ export function RoomPage() {
     return <RoomShell message={roomError ?? "This browser is not authorized to host the room."} />;
   }
 
-  const visibleStream = role === "host" ? screenShare.stream : remoteStream;
+  const visibleStream = roomState.selfIsPresenter ? screenShare.stream : remoteStream;
   const videoLabel =
     roomState.state === ROOM_STATES.HOST_SHARING
-      ? role === "host"
+      ? roomState.selfIsPresenter
         ? "Your shared screen preview"
-        : "Host shared screen"
-      : statusVideoLabel(roomState.state, role);
+        : `${roomState.presenterName}'s shared screen`
+      : statusVideoLabel(roomState.state, roomState.presenterName, roomState.selfIsPresenter);
 
   if (role === "viewer" && approvalState !== "approved") {
     return (
@@ -274,10 +327,10 @@ export function RoomPage() {
               socket={socket}
               roomId={roomId}
               isSharing={roomState.isSharing}
-              canDraw={role === "host" || roomState.viewerDrawingEnabled}
+              canDraw={role === "host" || roomState.selfIsPresenter || roomState.viewerDrawingEnabled}
               isHost={role === "host"}
             />
-            <RoomStatus state={roomState.state} role={role} />
+            <RoomStatus state={roomState.state} role={role} presenterName={roomState.presenterName} selfIsPresenter={roomState.selfIsPresenter} />
             <RoomInteractions
               socket={socket}
               roomId={roomId}
@@ -297,7 +350,7 @@ export function RoomPage() {
                 {configError}
               </div>
             ) : null}
-            {role === "host" && screenShare.error ? (
+            {roomState.selfIsPresenter && screenShare.error ? (
               <div className="rounded-md border-2 border-ink bg-coral px-4 py-3 text-sm font-bold text-ink shadow-soft">
                 {screenShare.error}
               </div>
@@ -318,7 +371,7 @@ export function RoomPage() {
               <div className="mt-3 flex flex-col gap-2">
                 <RoomQuickActions
                   inviteUrl={inviteUrl}
-                  isHost={role === "host"}
+                  canPresent={roomState.selfIsPresenter}
                   isSharing={Boolean(screenShare.stream)}
                   isStarting={screenShare.isStarting}
                   canShare={screenShare.isSupported}
@@ -326,6 +379,19 @@ export function RoomPage() {
                   onStop={handleStopSharing}
                   onLeave={handleLeave}
                 />
+                <div className="rounded-md border-2 border-ink bg-cream px-3 py-2 text-xs font-extrabold text-ink">
+                  Presenter: {roomState.selfIsPresenter ? "You" : roomState.presenterName}
+                </div>
+                {role === "host" && roomState.presenterId !== "host" ? (
+                  <button
+                    type="button"
+                    onClick={handlePresenterReclaim}
+                    className="flex min-h-10 w-full items-center justify-center gap-2 rounded-md border-2 border-ink bg-sun px-3 text-xs font-extrabold text-ink"
+                  >
+                    <RotateCcw aria-hidden className="h-4 w-4" />
+                    Reclaim presenter
+                  </button>
+                ) : null}
                 {role === "host" ? (
                   <ControlSection
                     title="Access"
@@ -527,7 +593,20 @@ export function RoomPage() {
                       <div className="mt-2 flex flex-col gap-2">
                         {roomState.viewers.map((viewer) => (
                           <div key={viewer.viewerId} className="flex items-center justify-between gap-3 rounded-md border-2 border-ink bg-white px-3 py-2">
-                            <span className="min-w-0 truncate text-sm font-extrabold text-ink">{viewer.displayName}</span>
+                            <span className="min-w-0 flex-1 truncate text-sm font-extrabold text-ink">{viewer.displayName}</span>
+                            {roomState.presenterId === viewer.viewerId ? (
+                              <span className="rounded-full border-2 border-ink bg-sun px-2 py-1 text-[10px] font-extrabold uppercase">Live</span>
+                            ) : (
+                              <button
+                                type="button"
+                                aria-label={`Invite ${viewer.displayName} to present`}
+                                title={`Invite ${viewer.displayName} to present`}
+                                onClick={() => handlePresenterInvite(viewer.viewerId)}
+                                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border-2 border-ink bg-sun"
+                              >
+                                <Presentation aria-hidden className="h-4 w-4" />
+                              </button>
+                            )}
                             <button
                               type="button"
                               aria-label={`Remove ${viewer.displayName}`}
@@ -547,15 +626,45 @@ export function RoomPage() {
                   </ControlSection>
                 ) : null}
                 {role === "viewer" ? (
-                  <ControlSection
-                    title="Room"
-                    icon={<MessageCircle aria-hidden className="h-4 w-4" />}
-                    summary={roomState.accessMode === ROOM_ACCESS_MODES.OPEN ? "Open room" : "Host approval required"}
-                  >
-                    <p className="text-xs font-bold text-ink/70">
-                      {roomState.locked ? "The room is locked to new viewers." : "The room is accepting new viewers."}
-                    </p>
-                  </ControlSection>
+                  <>
+                    {presenterInviteOpen ? (
+                      <div className="rounded-md border-2 border-ink bg-sun p-3 text-ink">
+                        <p className="text-xs font-extrabold uppercase tracking-wider">Present?</p>
+                        <p className="mt-1 text-sm font-bold">The host invited you to share your screen.</p>
+                        <div className="mt-3 grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handlePresenterResponse(true)}
+                            className="min-h-10 rounded-md border-2 border-ink bg-cream text-xs font-extrabold"
+                          >
+                            Accept
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePresenterResponse(false)}
+                            className="min-h-10 rounded-md border-2 border-ink bg-coral text-xs font-extrabold"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    <ControlSection
+                      title="Room"
+                      icon={<MessageCircle aria-hidden className="h-4 w-4" />}
+                      summary={`Presenter: ${roomState.selfIsPresenter ? "You" : roomState.presenterName}`}
+                    >
+                      <p className="text-xs font-bold text-ink/70">
+                        {roomState.selfIsPresenter
+                          ? "You can start sharing from the quick controls."
+                          : roomState.locked
+                            ? "The room is locked to new viewers."
+                            : roomState.accessMode === ROOM_ACCESS_MODES.OPEN
+                              ? "This is an open room."
+                              : "New viewers need host approval."}
+                      </p>
+                    </ControlSection>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -574,14 +683,14 @@ function RoomShell({ message }: { message: string }) {
   );
 }
 
-function statusVideoLabel(state: string, role: RoomRole): string {
+function statusVideoLabel(state: string, presenterName: string, selfIsPresenter: boolean): string {
   if (state === ROOM_STATES.HOST_STOPPED) {
-    return "The host has stopped sharing.";
+    return `${presenterName} has stopped sharing.`;
   }
 
   if (state === ROOM_STATES.HOST_DISCONNECTED) {
     return "The host disconnected.";
   }
 
-  return role === "host" ? "Start sharing to show your screen here." : "Waiting for the host to start sharing...";
+  return selfIsPresenter ? "Start sharing to show your screen here." : `Waiting for ${presenterName} to start sharing...`;
 }

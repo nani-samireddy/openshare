@@ -251,11 +251,11 @@ export function AnnotationCanvas({ socket, roomId, containerRef, videoRef, isSha
 
     socket.on(SOCKET_EVENTS.ANNOTATION_STROKE, handleStroke);
     socket.on(SOCKET_EVENTS.ANNOTATION_CLEAR, clearAll);
-    socket.on(SOCKET_EVENTS.HOST_STOPPED_SHARING, clearAll);
+    socket.on(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, clearAll);
     return () => {
       socket.off(SOCKET_EVENTS.ANNOTATION_STROKE, handleStroke);
       socket.off(SOCKET_EVENTS.ANNOTATION_CLEAR, clearAll);
-      socket.off(SOCKET_EVENTS.HOST_STOPPED_SHARING, clearAll);
+      socket.off(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, clearAll);
     };
   }, [clearAll, redraw, removeStrokeLater, roomId, socket]);
 

@@ -48,9 +48,12 @@ export function useRoom({ socket, roomId, role, displayName, password, hostToken
       raisedHands: [],
       selfHandRaised: false,
       isHostPresent: false,
-      isSharing: false
+      isSharing: false,
+      presenterId: "host",
+      presenterName: "Host",
+      selfIsPresenter: role === "host"
     }),
-    [roomId]
+    [role, roomId]
   );
   const [roomState, setRoomState] = useState(initialState);
   const [error, setError] = useState<string | null>(null);

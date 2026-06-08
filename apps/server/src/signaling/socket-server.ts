@@ -61,7 +61,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     const room = roomStore.getRoom(roomId);
     if (room) {
       for (const [viewerId, viewer] of room.viewers) {
-        io.to(viewer.socketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId, viewerId));
+        io.to(viewer.socketId).emit(SOCKET_EVENTS.ROOM_STATE, roomStore.getState(roomId, viewerId, true));
       }
     }
   }
@@ -110,7 +110,7 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       return false;
     }
 
-    return membership.role === "host" || (membership.role === "viewer" && room.viewerDrawingEnabled);
+    return membership.role === "host" || roomStore.isPresenter(socketId, roomId) || (membership.role === "viewer" && room.viewerDrawingEnabled);
   }
 
   function participantName(socketId: string, roomId: string): { name: string; role: "host" | "viewer" } | undefined {
@@ -342,11 +342,20 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       }
 
       try {
+        const wasPresenter = roomStore.getRoom(payload.roomId)?.presenterId === payload.viewerId;
         const viewer = roomStore.kickViewer(payload.roomId, payload.viewerId);
         io.to(viewer.socketId).emit(SOCKET_EVENTS.VIEWER_KICKED, {
           roomId: payload.roomId,
           reason: "The host removed you from the room."
         });
+        if (wasPresenter) {
+          io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, { roomId: payload.roomId });
+          io.to(roomChannel(payload.roomId)).emit(SOCKET_EVENTS.PRESENTER_CHANGED, {
+            roomId: payload.roomId,
+            presenterId: "host",
+            presenterName: "Host"
+          });
+        }
         socketFor(io, viewer.socketId)?.leave(roomChannel(payload.roomId));
         socket.emit(SOCKET_EVENTS.VIEWER_LEFT, {
           roomId: payload.roomId,
@@ -486,9 +495,10 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
     });
 
     socket.on(SOCKET_EVENTS.WEBRTC_ANSWER, (payload: ClientAnswerPayload) => {
+      const membership = roomStore.getMembership(socket.id);
       const fromId = roomStore.getParticipantId(socket.id);
       const presenterSocketId = roomStore.getPresenterSocketId(payload.roomId);
-      if (!fromId || !presenterSocketId || presenterSocketId === socket.id) {
+      if (!membership || membership.roomId !== payload.roomId || !fromId || !presenterSocketId || presenterSocketId === socket.id) {
         return;
       }
 
@@ -548,13 +558,13 @@ export function createSocketServer(httpServer: HttpServer, options: SignalingOpt
       }
       const hostSocketId = roomStore.getHostSocketId(roomId);
       if (hostSocketId) {
-          io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_LEFT, {
-            roomId,
-            viewerId: membership.participantId,
-            displayName: membership.displayName
-          });
-        }
+        io.to(hostSocketId).emit(SOCKET_EVENTS.VIEWER_LEFT, {
+          roomId,
+          viewerId: membership.participantId,
+          displayName: membership.displayName
+        });
       }
+    }
 
     if (roomStore.getRoom(roomId)) {
       emitRoomState(roomId);

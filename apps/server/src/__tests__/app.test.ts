@@ -305,7 +305,7 @@ describe("signaling", () => {
         SOCKET_EVENTS.ROOM_STATE,
         (state) => state.roomId === room.id && state.isSharing
       );
-      host.emit(SOCKET_EVENTS.HOST_STARTED_SHARING, { roomId: room.id });
+      host.emit(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, { roomId: room.id });
       await sharingState;
 
       const receivedByViewer = waitForEventWhere<AnnotationStrokePayload>(
@@ -349,7 +349,7 @@ describe("signaling", () => {
         SOCKET_EVENTS.ROOM_STATE,
         (state) => state.roomId === room.id && state.isSharing
       );
-      host.emit(SOCKET_EVENTS.HOST_STARTED_SHARING, { roomId: room.id });
+      host.emit(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, { roomId: room.id });
       await sharingState;
 
       host.on(SOCKET_EVENTS.ANNOTATION_STROKE, () => {
@@ -380,6 +380,87 @@ describe("signaling", () => {
       host.close();
       viewer.close();
       outsider.close();
+    }
+  });
+
+  it("lets hosts hand presentation to a viewer and reclaim it", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const url = getServerUrl(server);
+    const host = createClient(url, { transports: ["websocket"] });
+    const viewer = createClient(url, { transports: ["websocket"] });
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      const hostStatePromise = waitForEventWhere<RoomStatePayload>(
+        host,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.viewers.length === 1
+      );
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+      const hostState = await hostStatePromise;
+      const viewerId = hostState.viewers[0]!.viewerId;
+
+      const invite = waitForEventWhere<{ roomId: string }>(viewer, SOCKET_EVENTS.PRESENTER_INVITED, (payload) => payload.roomId === room.id);
+      host.emit(SOCKET_EVENTS.PRESENTER_INVITE, { roomId: room.id, viewerId });
+      await invite;
+
+      const viewerPresenterState = waitForEventWhere<RoomStatePayload>(
+        viewer,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.presenterId === viewerId && state.selfIsPresenter
+      );
+      viewer.emit(SOCKET_EVENTS.PRESENTER_RESPONSE, { roomId: room.id, accepted: true });
+      expect((await viewerPresenterState).presenterName).toBe("Nani");
+
+      const sharingState = waitForEventWhere<RoomStatePayload>(
+        host,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.presenterId === viewerId && state.isSharing
+      );
+      viewer.emit(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, { roomId: room.id });
+      expect((await sharingState).presenterName).toBe("Nani");
+
+      const reclaimedState = waitForEventWhere<RoomStatePayload>(
+        host,
+        SOCKET_EVENTS.ROOM_STATE,
+        (state) => state.roomId === room.id && state.presenterId === "host" && state.selfIsPresenter && !state.isSharing
+      );
+      host.emit(SOCKET_EVENTS.PRESENTER_RECLAIM, { roomId: room.id });
+      expect((await reclaimedState).selfIsPresenter).toBe(true);
+    } finally {
+      host.close();
+      viewer.close();
+    }
+  });
+
+  it("blocks non-presenters from taking presenter controls", async () => {
+    server = await buildServer({ port: 0, clientOrigins: ["http://localhost:5173"], iceServers: [], roomTtlMinutes: 30 });
+    await server.app.listen({ port: 0 });
+    const room = server.roomStore.createRoom(ROOM_ACCESS_MODES.OPEN);
+    const url = getServerUrl(server);
+    const host = createClient(url, { transports: ["websocket"] });
+    const viewer = createClient(url, { transports: ["websocket"] });
+
+    try {
+      await Promise.all([waitForConnect(host), waitForConnect(viewer)]);
+      await emitJoin(host, { roomId: room.id, role: "host" });
+      await emitJoin(viewer, { roomId: room.id, role: "viewer", displayName: "Nani" });
+
+      viewer.emit(SOCKET_EVENTS.PRESENTER_STARTED_SHARING, { roomId: room.id });
+      viewer.emit(SOCKET_EVENTS.PRESENTER_RECLAIM, { roomId: room.id });
+      await delay(40);
+
+      expect(server.roomStore.getState(room.id, "host", true)).toMatchObject({
+        presenterId: "host",
+        selfIsPresenter: true,
+        isSharing: false
+      });
+    } finally {
+      host.close();
+      viewer.close();
     }
   });
 

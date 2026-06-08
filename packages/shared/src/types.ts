@@ -219,7 +219,7 @@ export type ServerAnswerPayload = ClientAnswerPayload & {
 
 export type ClientIceCandidatePayload = {
   roomId: string;
-  targetId?: string;
+  targetId?: PresenterId;
   candidate: RTCIceCandidateInit;
 };
 

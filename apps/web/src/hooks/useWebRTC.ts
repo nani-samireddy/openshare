@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   SOCKET_EVENTS,
   type ClientIceCandidatePayload,
+  type PresenterId,
   type RoomRole,
+  type RoomViewer,
   type ServerAnswerPayload,
   type ServerIceCandidatePayload,
   type ServerOfferPayload,
-  type ViewerJoinedPayload,
   type ViewerLeftPayload
 } from "@openshare/shared";
 import type { Socket } from "socket.io-client";
@@ -15,6 +16,9 @@ type UseWebRTCOptions = {
   socket: Socket;
   roomId: string;
   role: RoomRole;
+  selfId?: string;
+  presenterId: PresenterId;
+  viewers: RoomViewer[];
   iceServers: RTCIceServer[];
   localStream: MediaStream | null;
   onConnectionState: (state: WebRTCConnectionState) => void;
@@ -23,15 +27,42 @@ type UseWebRTCOptions = {
 
 export type WebRTCConnectionState = "idle" | "connecting" | "connected" | "failed";
 
-export function useWebRTC({ socket, roomId, role, iceServers, localStream, onConnectionState, onRemoteStream }: UseWebRTCOptions) {
-  const hostPeersRef = useRef(new Map<string, RTCPeerConnection>());
-  const viewerPeerRef = useRef<RTCPeerConnection | null>(null);
+export function useWebRTC({
+  socket,
+  roomId,
+  role,
+  selfId,
+  presenterId,
+  viewers,
+  iceServers,
+  localStream,
+  onConnectionState,
+  onRemoteStream
+}: UseWebRTCOptions) {
+  const outgoingPeersRef = useRef(new Map<PresenterId, RTCPeerConnection>());
+  const receiverPeerRef = useRef<RTCPeerConnection | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const selfParticipantId: PresenterId | undefined = role === "host" ? "host" : selfId;
+  const isPresenter = Boolean(selfParticipantId && selfParticipantId === presenterId);
+  const audienceIds = useMemo<PresenterId[]>(() => {
+    if (!isPresenter || !selfParticipantId) {
+      return [];
+    }
 
-  const updateHostConnectionState = useCallback(() => {
-    const peers = Array.from(hostPeersRef.current.values());
+    const targets: PresenterId[] = selfParticipantId === "host" ? [] : ["host"];
+    for (const viewer of viewers) {
+      if (viewer.viewerId !== selfParticipantId) {
+        targets.push(viewer.viewerId);
+      }
+    }
+    return targets;
+  }, [isPresenter, selfParticipantId, viewers]);
+  const audienceKey = audienceIds.join("|");
+
+  const updatePresenterConnectionState = useCallback(() => {
+    const peers = Array.from(outgoingPeersRef.current.values());
     if (peers.length === 0) {
-      onConnectionState(localStream ? "idle" : "idle");
+      onConnectionState("idle");
       return;
     }
 
@@ -46,48 +77,62 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
     }
 
     onConnectionState("connecting");
-  }, [localStream, onConnectionState]);
+  }, [onConnectionState]);
 
-  const closeHostPeer = useCallback((viewerId: string) => {
-    hostPeersRef.current.get(viewerId)?.close();
-    hostPeersRef.current.delete(viewerId);
-    updateHostConnectionState();
-  }, [updateHostConnectionState]);
+  const closeOutgoingPeer = useCallback(
+    (targetId: PresenterId) => {
+      outgoingPeersRef.current.get(targetId)?.close();
+      outgoingPeersRef.current.delete(targetId);
+      updatePresenterConnectionState();
+    },
+    [updatePresenterConnectionState]
+  );
 
-  const closeAll = useCallback(() => {
-    for (const peer of hostPeersRef.current.values()) {
+  const closeOutgoing = useCallback(() => {
+    for (const peer of outgoingPeersRef.current.values()) {
       peer.close();
     }
-    hostPeersRef.current.clear();
-    viewerPeerRef.current?.close();
-    viewerPeerRef.current = null;
+    outgoingPeersRef.current.clear();
+    updatePresenterConnectionState();
+  }, [updatePresenterConnectionState]);
+
+  const closeReceiver = useCallback(() => {
+    const hadReceiver = Boolean(receiverPeerRef.current || remoteStreamRef.current);
+    receiverPeerRef.current?.close();
+    receiverPeerRef.current = null;
     remoteStreamRef.current = null;
-    onConnectionState("idle");
-    onRemoteStream(null);
+    if (hadReceiver) {
+      onRemoteStream(null);
+      onConnectionState("idle");
+    }
   }, [onConnectionState, onRemoteStream]);
 
-  const createHostOffer = useCallback(
-    async (viewerId: string) => {
+  const closeAll = useCallback(() => {
+    closeOutgoing();
+    closeReceiver();
+  }, [closeOutgoing, closeReceiver]);
+
+  const createPresenterOffer = useCallback(
+    async (targetId: PresenterId) => {
       if (!localStream) {
         return;
       }
 
-      closeHostPeer(viewerId);
+      closeOutgoingPeer(targetId);
       const peer = new RTCPeerConnection({ iceServers });
-      hostPeersRef.current.set(viewerId, peer);
+      outgoingPeersRef.current.set(targetId, peer);
       onConnectionState("connecting");
 
       for (const track of localStream.getTracks()) {
         peer.addTrack(track, localStream);
       }
 
-      peer.onconnectionstatechange = updateHostConnectionState;
-
+      peer.onconnectionstatechange = updatePresenterConnectionState;
       peer.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, {
             roomId,
-            targetId: viewerId,
+            targetId,
             candidate: event.candidate.toJSON()
           } satisfies ClientIceCandidatePayload);
         }
@@ -96,28 +141,45 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
       try {
         const offer = await peer.createOffer();
         await peer.setLocalDescription(offer);
-        socket.emit(SOCKET_EVENTS.WEBRTC_OFFER, { roomId, viewerId, sdp: offer });
+        socket.emit(SOCKET_EVENTS.WEBRTC_OFFER, { roomId, targetId, sdp: offer });
       } catch {
         onConnectionState("failed");
       }
     },
-    [closeHostPeer, iceServers, localStream, onConnectionState, roomId, socket, updateHostConnectionState]
+    [closeOutgoingPeer, iceServers, localStream, onConnectionState, roomId, socket, updatePresenterConnectionState]
   );
 
   useEffect(() => {
-    if (role !== "host") {
+    if (!isPresenter) {
+      closeOutgoing();
       return;
     }
 
-    function handleViewerJoined(payload: ViewerJoinedPayload) {
-      if (payload.roomId === roomId) {
-        void createHostOffer(payload.viewerId);
+    closeReceiver();
+
+    if (!localStream) {
+      closeOutgoing();
+      return;
+    }
+
+    const currentTargets = new Set(audienceIds);
+    for (const targetId of outgoingPeersRef.current.keys()) {
+      if (!currentTargets.has(targetId)) {
+        closeOutgoingPeer(targetId);
       }
     }
 
-    function handleViewerLeft(payload: ViewerLeftPayload) {
+    for (const targetId of audienceIds) {
+      if (!outgoingPeersRef.current.has(targetId)) {
+        void createPresenterOffer(targetId);
+      }
+    }
+  }, [audienceKey, audienceIds, closeOutgoing, closeOutgoingPeer, closeReceiver, createPresenterOffer, isPresenter, localStream]);
+
+  useEffect(() => {
+    function handleParticipantLeft(payload: ViewerLeftPayload) {
       if (payload.roomId === roomId) {
-        closeHostPeer(payload.viewerId);
+        closeOutgoingPeer(payload.viewerId);
       }
     }
 
@@ -126,7 +188,7 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
         return;
       }
 
-      const peer = hostPeersRef.current.get(payload.viewerId);
+      const peer = outgoingPeersRef.current.get(payload.fromId);
       if (peer) {
         try {
           await peer.setRemoteDescription(payload.sdp);
@@ -137,11 +199,11 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
     }
 
     async function handleIce(payload: ServerIceCandidatePayload) {
-      if (payload.roomId !== roomId || payload.fromId === "host") {
+      if (payload.roomId !== roomId) {
         return;
       }
 
-      const peer = hostPeersRef.current.get(payload.fromId);
+      const peer = outgoingPeersRef.current.get(payload.fromId);
       if (peer) {
         try {
           await peer.addIceCandidate(payload.candidate);
@@ -151,42 +213,34 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
       }
     }
 
-    socket.on(SOCKET_EVENTS.VIEWER_JOINED, handleViewerJoined);
-    socket.on(SOCKET_EVENTS.VIEWER_LEFT, handleViewerLeft);
+    socket.on(SOCKET_EVENTS.VIEWER_LEFT, handleParticipantLeft);
     socket.on(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
     socket.on(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, handleIce);
 
     return () => {
-      socket.off(SOCKET_EVENTS.VIEWER_JOINED, handleViewerJoined);
-      socket.off(SOCKET_EVENTS.VIEWER_LEFT, handleViewerLeft);
+      socket.off(SOCKET_EVENTS.VIEWER_LEFT, handleParticipantLeft);
       socket.off(SOCKET_EVENTS.WEBRTC_ANSWER, handleAnswer);
       socket.off(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, handleIce);
     };
-  }, [closeHostPeer, createHostOffer, onConnectionState, role, roomId, socket]);
+  }, [closeOutgoingPeer, onConnectionState, roomId, socket]);
 
   useEffect(() => {
-    if (role === "host" && !localStream) {
-      closeAll();
-    }
-  }, [closeAll, localStream, role]);
-
-  useEffect(() => {
-    if (role !== "viewer") {
+    if (isPresenter || !selfParticipantId) {
       return;
     }
 
     async function handleOffer(payload: ServerOfferPayload) {
-      if (payload.roomId !== roomId) {
+      if (payload.roomId !== roomId || payload.targetId !== selfParticipantId) {
         return;
       }
 
-      viewerPeerRef.current?.close();
+      receiverPeerRef.current?.close();
       remoteStreamRef.current = new MediaStream();
       onConnectionState("connecting");
       onRemoteStream(remoteStreamRef.current);
 
       const peer = new RTCPeerConnection({ iceServers });
-      viewerPeerRef.current = peer;
+      receiverPeerRef.current = peer;
 
       peer.onconnectionstatechange = () => {
         if (peer.connectionState === "connected") {
@@ -215,7 +269,7 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
         if (event.candidate) {
           socket.emit(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, {
             roomId,
-            targetId: "host",
+            targetId: presenterId,
             candidate: event.candidate.toJSON()
           } satisfies ClientIceCandidatePayload);
         }
@@ -232,32 +286,38 @@ export function useWebRTC({ socket, roomId, role, iceServers, localStream, onCon
     }
 
     async function handleIce(payload: ServerIceCandidatePayload) {
-      if (payload.roomId === roomId && payload.fromId === "host" && viewerPeerRef.current) {
+      if (payload.roomId === roomId && payload.fromId === presenterId && receiverPeerRef.current) {
         try {
-          await viewerPeerRef.current.addIceCandidate(payload.candidate);
+          await receiverPeerRef.current.addIceCandidate(payload.candidate);
         } catch {
           onConnectionState("failed");
         }
       }
     }
 
-    function handleHostStopped() {
-      closeAll();
-    }
-
     socket.on(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
     socket.on(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, handleIce);
-    socket.on(SOCKET_EVENTS.HOST_STOPPED_SHARING, handleHostStopped);
-    socket.on(SOCKET_EVENTS.VIEWER_KICKED, handleHostStopped);
 
     return () => {
       socket.off(SOCKET_EVENTS.WEBRTC_OFFER, handleOffer);
       socket.off(SOCKET_EVENTS.WEBRTC_ICE_CANDIDATE, handleIce);
-      socket.off(SOCKET_EVENTS.HOST_STOPPED_SHARING, handleHostStopped);
-      socket.off(SOCKET_EVENTS.VIEWER_KICKED, handleHostStopped);
-      closeAll();
+      closeReceiver();
     };
-  }, [closeAll, iceServers, onConnectionState, onRemoteStream, role, roomId, socket]);
+  }, [closeReceiver, iceServers, isPresenter, onConnectionState, onRemoteStream, presenterId, roomId, selfParticipantId, socket]);
+
+  useEffect(() => {
+    function handlePresenterStopped() {
+      closeAll();
+    }
+
+    socket.on(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, handlePresenterStopped);
+    socket.on(SOCKET_EVENTS.VIEWER_KICKED, handlePresenterStopped);
+
+    return () => {
+      socket.off(SOCKET_EVENTS.PRESENTER_STOPPED_SHARING, handlePresenterStopped);
+      socket.off(SOCKET_EVENTS.VIEWER_KICKED, handlePresenterStopped);
+    };
+  }, [closeAll, socket]);
 
   useEffect(() => closeAll, [closeAll]);
 }
